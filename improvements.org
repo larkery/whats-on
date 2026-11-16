@@ -137,6 +137,17 @@
    normalising alone. Guess: venue boilerplate carries a real venue→taste
    signal. Revisit alongside 5. with venue as an explicit feature.
 3. subtract mean from vectors
+
+   Bench 2026-11-16 (grouped LOO, mean pct / AUC). Skew 4.16 → 1.36.
+   | baseline                 | likes 71.6 | booked 69.0 | AUC 69.6 |
+   | baseline, no penalty     | likes 54.0 | booked 77.3 | AUC 68.8 |
+   | centered (matched thr.)  | likes 70.7 | booked 78.4 | AUC 71.3 |
+   | centered, no penalty     | likes 84.4 | booked 78.5 | AUC 85.2 |
+   Positives +11 pct points [+4, +19] for centered + no penalty. It's the
+   combination that wins: the penalty props up raw kNN but hurts after
+   centering. Two catches. (a) Top-3% hits for likes fall 25% → 16% (8 → 5
+   of 32, so noisy). (b) Dislikes then play no part in the score, which
+   is what 5. should fix.
 4. compute z-scores for examples - ? hubness correction (e.g.
     CSLS, from cross-lingual word embeddings).
 5. Weigh likes against dislikes directly. Replace "positives minus a

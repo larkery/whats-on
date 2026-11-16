@@ -60,9 +60,14 @@
 
 (def ^:private top-k 3)
 
+;; similarity above which a dislike counts against an event, and a like is
+;; worth citing as the reason; tuned to raw bge cosines
+(def strong-sim 0.62)
+
 (defn taste-score
   "→ {:score s :because example} or nil if the item has no embedding yet."
-  [examples ^floats v]
+  ([examples v] (taste-score examples v strong-sim))
+  ([examples ^floats v strong-sim]
   (when v
     (let [sims (map #(assoc % :sim (embed/cosine (:vec %) v)) examples)
           pos (->> sims (filter #(pos? (:weight %))) (sort-by :sim >))
@@ -72,10 +77,10 @@
                         (/ (reduce + (map #(+ (:sim %) (* 0.03 (dec (:weight %)))) top)) (count top)))
                       0.5)
           ;; only a strong resemblance to something disliked counts against
-          penalty (if-let [n (first neg)] (* 2.0 (max 0.0 (- (:sim n) 0.62))) 0.0)]
+          penalty (if-let [n (first neg)] (* 2.0 (max 0.0 (- (:sim n) strong-sim))) 0.0)]
       {:score (- pos-score penalty)
-       :because (when (and (first pos) (> (:sim (first pos)) 0.62)) (first pos))
-       :unlike (when (pos? penalty) (first neg))})))
+       :because (when (and (first pos) (> (:sim (first pos)) strong-sim)) (first pos))
+       :unlike (when (pos? penalty) (first neg))}))))
 
 (defn- keyword-hit? [q item]
   (let [hay (str/lower-case (str/join " " (concat [(:title item) (:subtitle item) (:venue item)] (:tags item))))

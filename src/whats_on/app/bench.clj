@@ -106,7 +106,61 @@
   [name pred scorer]
   {:name name :fit (fn [train pool] ((:fit scorer) (remove pred train) pool))})
 
+(defn mean-vec ^floats [vecs]
+  (let [n (count vecs)
+        acc (double-array embed/dim)]
+    (doseq [^floats v vecs] (dotimes [i embed/dim] (aset acc i (+ (aget acc i) (aget v i)))))
+    (float-array (map #(/ % n) acc))))
+
+(defn center
+  "v − mean, renormalised so cosine is still a dot product."
+  ^floats [^floats mu ^floats v]
+  (let [out (float-array embed/dim)]
+    (dotimes [i embed/dim] (aset out i (- (aget v i) (aget mu i))))
+    (let [n (Math/sqrt (areduce out i acc 0.0 (+ acc (* (aget out i) (aget out i)))))]
+      (dotimes [i embed/dim] (aset out i (float (/ (aget out i) n)))))
+    out))
+
+(defn- quantile [xs q]
+  (let [v (vec (sort xs))] (v (min (dec (count v)) (long (* q (count v)))))))
+
+(defn- sims-sample
+  "Similarities between the examples and every 10th pool event."
+  [examples pool]
+  (for [e examples, v (take-nth 10 pool)] (embed/cosine (:vec e) v)))
+
+(defn centered
+  "Subtract the pool's mean vector from everything before comparing. bge's
+  vectors share a big common component (unrelated texts sit at ~0.6 cosine);
+  removing it should spread similarities out and weaken hubs.
+  `threshold` is taste-score's strong-sim: a number, or :matched to move it to
+  the same quantile of example–event similarity that 0.62 is in raw space, so
+  the dislike penalty stays as selective as before."
+  [name threshold]
+  {:name name
+   :fit (fn [train pool]
+          (let [mu (mean-vec pool)
+                c (partial center mu)
+                train' (mapv #(update % :vec c) train)
+                strong (if (= :matched threshold)
+                         (let [raw (sims-sample train pool)
+                               share-below (/ (count (filter #(< % rank/strong-sim) raw)) (count raw))]
+                           (quantile (sims-sample train' (map c pool)) share-below))
+                         threshold)]
+            (fn [v] (:score (rank/taste-score train' (c v) strong)))))})
+
+(def no-penalty
+  ;; a dislike never counts against an event
+  ##Inf)
+
 (def scorers
+  [baseline
+   {:name "baseline, no penalty"
+    :fit (fn [train _pool] (fn [v] (:score (rank/taste-score train v no-penalty))))}
+   (centered "centered" :matched)
+   (centered "centered, no penalty" no-penalty)])
+
+(def booking-ablations
   [baseline
    (train-without "baseline −booked" #(= "booked" (:verdict %)) baseline)
    (train-without "baseline −sparse booked" :sparse? baseline)])
@@ -280,7 +334,10 @@
      (println "\nHubs (share of positive examples with the event among their 20 nearest in the pool):")
      (doseq [{:keys [title venue share]} (hubs snap 20 10)]
        (println (format "  %4.0f%%  %s · %s" (* 100 share) title venue)))
-     (println (format "\nk-occurrence skew of pool embeddings (k=10): %.2f" (k-occurrence-skew (:pool-vecs snap) 10)))
+     (println (format "\nk-occurrence skew of pool embeddings (k=10): raw %.2f, centered %.2f"
+                      (k-occurrence-skew (:pool-vecs snap) 10)
+                      (let [mu (mean-vec (:pool-vecs snap))]
+                        (k-occurrence-skew (map (partial center mu) (:pool-vecs snap)) 10))))
      (println "\nPer-item results:" (write-results! snap version rows))
      rows)))
 

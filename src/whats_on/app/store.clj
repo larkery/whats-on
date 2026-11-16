@@ -87,6 +87,14 @@
                                 (map #(select-keys % [:id :start_date :start_time :end_date :booking_url :sold_out]) rows)))
            :tags (try (vec (json/parse-string (or (:tags first-row) "[]"))) (catch Exception _ [])))))
 
+(defn group-items
+  "Event rows (one per performance) → items, one per distinct title+venue."
+  [rows]
+  (->> rows
+       (group-by #(norm-key (:title %) (:venue %)))
+       vals
+       (mapv ->item)))
+
 (defonce ^:private cache (atom nil))
 
 (defn- events-version [ds]
@@ -99,11 +107,7 @@
   (let [v (events-version ds)]
     (if (= v (:version @cache))
       (:items @cache)
-      (let [rows (q ds ["select * from upcoming order by start_date, start_time"])
-            items (->> rows
-                       (group-by #(norm-key (:title %) (:venue %)))
-                       vals
-                       (mapv ->item))]
+      (let [items (group-items (q ds ["select * from upcoming order by start_date, start_time"]))]
         (reset! cache {:version v :items items})
         items))))
 
@@ -160,3 +164,23 @@
 
 (defn delete-history! [ds id]
   (jdbc/execute! ds ["delete from history where id = ?" id]))
+
+(defn import-bookings!
+  "One-off: seed feedback with the past bookings extracted from email (see
+  whats-on.bookings) as 'booked'. Bookings have the same descriptive columns as
+  events, so their text is embedded the same way. Repeat bookings of the same
+  thing collapse into one row; an existing verdict is never overwritten.
+  Returns the number of rows added."
+  [ds]
+  (let [groups (group-by #(norm-key (:title %) (:venue %))
+                         (q ds ["select * from bookings order by event_date"]))]
+    (reduce + (for [[k rows] groups
+                    ;; prefer a row with a description, then the most recent
+                    :let [b (or (last (remove #(str/blank? (:description %)) rows)) (last rows))
+                          text (embed-text b)]]
+                (:next.jdbc/update-count
+                 (jdbc/execute-one! ds ["insert into feedback (key, verdict, title, venue, start_date, url, text, text_hash, updated_at)
+                                         values (?,?,?,?,?,?,?,?,?)
+                                         on conflict(key) do nothing"
+                                        k "booked" (:title b) (:venue b) (:event_date b) (:url b)
+                                        text (sha1 text) (now)]))))))

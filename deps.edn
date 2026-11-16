@@ -9,4 +9,6 @@
         org.xerial/sqlite-jdbc                 {:mvn/version "3.46.1.0"}
         com.microsoft.onnxruntime/onnxruntime  {:mvn/version "1.20.0"}
         cheshire/cheshire                      {:mvn/version "5.13.0"}}
- :aliases {:app {:main-opts ["-m" "whats-on.app.main"]}}}
+ :aliases {:app {:main-opts ["-m" "whats-on.app.main"]}
+           ;; recommender testbench: `clojure -M:bench snapshot`, then `clojure -M:bench run`
+           :bench {:main-opts ["-m" "whats-on.app.bench"]}}}

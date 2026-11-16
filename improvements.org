@@ -104,7 +104,16 @@
    - =git init= before changing the recommender, so results can be tied
      to code versions
 
-   *Steps*
+   *Baseline* (snapshot 2026-11-16, pool 2011, grouped LOO, mean pct /
+   top-3% rate): like 71.6 / 25%, booked 69.0 / 9%, dislike 51.8 / 0%,
+   AUC 0.70. Hidden events rank at ~94: the model rates them very highly
+   (Bublé, CATS, BTTF musical, philharmonic). So hidden ≠ dislike: they're
+   the confounders for 6. k-occurrence skew 4.16, so the space is very
+   hubby (2./3.). Bookings: −booked lifts likes +3 but drops booked −6;
+   −sparse booked changes nothing (CI spans 0). Run takes ~3 min, most of
+   it in taste-score allocation; fine for now.
+
+   *Steps* (1–6 done 2026-11-16)
    1. one-off import of bookings → feedback (=booked=)
    2. snapshot: dated db copy
    3. bench loop + baseline scorer + metrics + per-item table

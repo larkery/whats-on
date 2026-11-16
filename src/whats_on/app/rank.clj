@@ -42,10 +42,11 @@
   "All taste examples as {:vec :weight :label}. Computes any missing embeddings."
   [ds]
   (concat
-   (for [{:keys [verdict text title venue]} (store/feedback ds)
+   (for [{:keys [key verdict text title venue]} (store/feedback ds)
          :let [w (verdict-weights verdict)]
          :when (and w (not (str/blank? text)))]
      {:vec (store/vector-for ds text) :weight w
+      :key key :verdict verdict :title title
       :label (str title (when venue (str " at " venue)))
       :why (if (neg? w) "you disliked" "you liked")})
    (for [{:keys [text weight]} (store/statements ds)]
@@ -54,7 +55,7 @@
       :label (str "“" text "”") :why "you said"})
    (for [{:keys [title venue notes]} (store/history ds)]
      {:vec (store/vector-for ds (str/join ". " (remove str/blank? [title (some->> venue (str "at ")) notes])))
-      :weight 1.5
+      :weight 1.5 :title title
       :label (str title (when venue (str " at " venue))) :why "you went to"})))
 
 (def ^:private top-k 3)

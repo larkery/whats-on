@@ -9,3 +9,4 @@ bench/snapshots/
 .clj-kondo/
 .lsp/
 .nrepl-port
+bench/results/

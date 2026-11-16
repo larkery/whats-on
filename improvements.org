@@ -1,0 +1,138 @@
+1. testbench - leave one out
+
+   Goal: a repeatable before/after measure for every change below. Built
+   first, run on a frozen snapshot, baseline = current rank/taste-score.
+
+   *Data* (as of 2026-11-16)
+
+   | source                  |    n | role                                  |
+   |-------------------------+------+---------------------------------------|
+   | feedback like           |   32 | held out (+)                          |
+   | feedback dislike        |   14 | held out (−)                          |
+   | feedback hidden         |    5 | held out (weak −), reported apart     |
+   | booked, with descr.     |   34 | held out (+), reported apart          |
+   | booked, title+venue     |   62 | training only (see below)             |
+   | statements, history     | 5, 5 | always in training, never held out    |
+   | upcoming events         | 2852 | unlabelled pool to rank against       |
+
+   *Bookings (email-extracted)* — one-off seed material, not kept up to
+   date. Positive only, 2009–2026, 96 rows in =bookings=. Import them
+   once into =feedback= with verdict =booked= (weight 1.5, already in
+   the UI):
+   - key = store/norm-key title venue (repeat bookings collapse into one
+     row); text = store/embed-text of the booking row (same columns as
+     events), so their vectors are made the same way as pool items'.
+     Don't overwrite an existing verdict (1 key overlaps already).
+   - Then they flow through rank/examples and the bench with no special
+     case.
+   - 34 (mostly headfirst) have a description: held out as positives
+     like likes, +34 test positives.
+   - 62 are title + venue only. Short-text vectors sit in a different
+     region from description-rich pool items, so ranking them measures
+     text length, not taste. Bench rule: hold out a =booked= row only if
+     its text includes a description; otherwise it's training only. Their
+     value is measured by ablation (baseline ± booked).
+   - Watch for: short-text bias (check score vs text length among top-K
+     pool items once sparse bookings are in training), and taste drift
+     (2009 cinema bookings). Recency weighting is a model variant to test,
+     not a bench concern.
+
+   *Scorer interface* — every variant is fit/score over the training
+   examples plus the unlabelled pool (needed for centering, CSLS,
+   unrated-as-weak-negatives):
+
+   #+begin_src clojure
+   {:name "baseline"
+    :fit  (fn [train-examples pool-vecs] (fn [vec] score))}
+   #+end_src
+
+   Baseline wraps rank/taste-score unchanged. Later, move rank.clj onto
+   the same shape so app and bench run identical code. Training-source
+   weights (bookings on/off, weight, recency) are scorer options, so
+   ablations are just more scorers.
+
+   *Snapshot* — the corpus changes daily and feedback grows, so compare
+   only on a frozen snapshot: a dated copy of whats-on.db (e.g.
+   =bench/snapshots/2026-11-16.db=, made with =sqlite3 .backup= or
+   =vacuum into= so the WAL is included). Record the snapshot name with
+   every result. The bench opens the copy, so the live db is never
+   touched. The pool is read from the snapshot's =upcoming= view, which
+   is relative to today's date, so pin the pool by recording the date
+   and filtering on it rather than trusting the view. Text-cleaning
+   variants (5.) re-embed ~3k texts; let them cache into the snapshot's
+   =embeddings= table (it's keyed by text hash, so variants don't clash).
+
+   *Loop* — for each held-out item i:
+   - train on everything else, minus i's duplicate group
+   - remove all labelled items from the pool (i must not compete with
+     its own upcoming copy)
+   - record i's percentile rank in the pool. Use percentiles, not raw
+     scores: they are comparable across scorers and match the UI's job of
+     sorting the list.
+
+   *Grouping / leakage* — recurring series and the same film at two
+   cinemas are near-identical vectors. Plain LOO lets kNN find the twin.
+   Also run grouped LOO, holding out clusters together (same normalised
+   title, or cosine > ~0.95). This also covers cross-source duplicates:
+   the same event liked /and/ in bookings, or repeat bookings of one class.
+   Report both; the gap between them shows how much the score relies on
+   memorised near-duplicates.
+
+   *Metrics* (broken down by source: likes / bookings / dislikes / hidden)
+   - positives: hit@K (K = number of suggestions shown), mean percentile
+   - negatives: rate in top-K, mean percentile (lower is better)
+   - AUC of positives vs dislikes on the LOO percentiles
+   - diagnostics: a per-item table (title, source, percentile, nearest
+     training example + sim), which is also the input to 6. Plus hubness:
+     pool items in the top-K across most folds, and k-occurrence skew.
+     This directly measures what 2. and 3. are meant to fix.
+
+   *Statistics* (n ≈ 85 held out)
+   - compare scorers paired on the same items: wins/losses + paired
+     bootstrap CI on mean percentile difference
+   - one positive changes hit@K by ~1.5%; small differences are noise
+   - don't grid-search λ/k/thresholds against this; prefer defaults and a
+     few coarse settings. Recheck as ratings accumulate.
+   - later, when there's enough data: a time-ordered split (train on
+     older, test on newer)
+
+   *Practicalities*
+   - =src/whats_on/app/bench.clj=, a =:bench= alias in deps.edn, REPL use
+     =(bench/run snapshot [baseline centered csls])=; prints a comparison
+     table and writes per-item results to EDN/CSV
+   - cost: ~85 folds × 2.8k pool × ~150 examples × 384 dims, takes seconds
+   - =git init= before changing the recommender, so results can be tied
+     to code versions
+
+   *Steps*
+   1. one-off import of bookings → feedback (=booked=)
+   2. snapshot: dated db copy
+   3. bench loop + baseline scorer + metrics + per-item table
+   4. grouping (dupe clusters) + paired comparison
+   5. first ablation: baseline ± booked (sparse / rich / both)
+   6. hubness diagnostics
+2. subtract mean from vectors
+3. compute z-scores for examples hubness correction (e.g.
+    CSLS, from cross-lingual word embeddings). The idea is to discount
+    items that are close to everything.
+4. Weigh likes against dislikes directly. Replace "positives minus a
+     thresholded penalty" with something like mean(top-k pos) −
+     λ·mean(top-k neg). A further step, once you have about 50 ratings
+     (you have 46): a logistic regression or linear SVM on the 384-d
+     vectors, trained on like/booked (+), dislike/hidden (−) and a random
+     sample of unrated events as weak negatives. Blend it with the kNN
+     score. It learns which directions matter to you; for example, it can
+     tell "venue" apart from "subject matter".
+5. clean text better
+
+   1. normalise text
+   2. split on all sensible split markers
+   3. look for exact duplicates that occur too much to be information
+   4. maybe do something similar with cosine similarity
+
+   this is done per-source not across the dataset as the sources have
+   template strings
+6. show most confounding examples in ui for boosting training
+
+   
+   

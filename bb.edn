@@ -1,0 +1,17 @@
+{:paths ["src"]
+ :pods {org.babashka/go-sqlite3 {:version "0.3.9"}}
+ :tasks
+ {:requires ([whats-on.main :as m])
+  scrape   {:doc  "Fetch events from all sources into the db. Options: --only a,b  --days N"
+            :task (apply m/scrape *command-line-args*)}
+  upcoming {:doc  "Print a plain list of upcoming events. Options: --days N  --q text  --category text"
+            :task (apply m/upcoming *command-line-args*)}
+  html     {:doc  "Write a plain HTML list of upcoming events. Options: --days N  --out file"
+            :task (apply m/html *command-line-args*)}
+  sources  {:doc  "List the configured sources"
+            :task (m/sources)}
+  bookings {:doc  "Extract past ticket bookings from Thunderbird into the bookings table. Options: --profile dir  --account host"
+            :requires ([whats-on.bookings :as b])
+            :task (apply b/run *command-line-args*)}
+  app      {:doc  "Start the suggestions web app on http://localhost:8787 (JVM; see deps.edn)"
+            :task (apply shell "clojure -M:app" *command-line-args*)}}}

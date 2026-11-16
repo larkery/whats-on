@@ -1,0 +1,12 @@
+;; JVM side: the local web app (suggestions, search, feedback, embeddings).
+;; The scrapers run under babashka (bb.edn); both share whats-on.db.
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure                    {:mvn/version "1.12.0"}
+        http-kit/http-kit                      {:mvn/version "2.8.0"}
+        ring/ring-core                         {:mvn/version "1.12.2"}
+        hiccup/hiccup                          {:mvn/version "2.0.0-RC3"}
+        com.github.seancorfield/next.jdbc      {:mvn/version "1.3.939"}
+        org.xerial/sqlite-jdbc                 {:mvn/version "3.46.1.0"}
+        com.microsoft.onnxruntime/onnxruntime  {:mvn/version "1.20.0"}
+        cheshire/cheshire                      {:mvn/version "5.13.0"}}
+ :aliases {:app {:main-opts ["-m" "whats-on.app.main"]}}}

@@ -1,0 +1,11 @@
+# data: the live db and bench snapshots stay out of git
+*.db
+*.db-shm
+*.db-wal
+bench/snapshots/
+
+# tooling caches
+.cpcache/
+.clj-kondo/
+.lsp/
+.nrepl-port

@@ -140,6 +140,19 @@
       (recur (inc i) (+ acc (* (aget a i) (aget b i))))
       acc)))
 
+(defn mean-vec ^floats [vecs]
+  (let [n (count vecs)
+        acc (double-array dim)]
+    (doseq [^floats v vecs] (dotimes [i dim] (aset acc i (+ (aget acc i) (aget v i)))))
+    (float-array (map #(/ % n) acc))))
+
+(defn center
+  "v − mean, renormalised so cosine is still a dot product."
+  ^floats [^floats mu ^floats v]
+  (let [out (float-array dim)]
+    (dotimes [i dim] (aset out i (- (aget v i) (aget mu i))))
+    (normalise! out)))
+
 (defn ->bytes ^bytes [^floats v]
   (let [bb (java.nio.ByteBuffer/allocate (* 4 (alength v)))]
     (.order bb java.nio.ByteOrder/LITTLE_ENDIAN)

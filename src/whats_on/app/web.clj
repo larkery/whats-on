@@ -69,14 +69,19 @@
      [:body
       [:header
        [:nav
-        (for [[href label] [["/plan" "Plan ahead"] ["/find" "Find something"] ["/rate" "Quick rate"] ["/taste" "My taste"]]]
+        (for [[href label] [["/plan" "Plan ahead"] ["/find" "Find something"] ["/rate" "Help me learn"] ["/taste" "My taste"]]]
           [:a {:href href :aria-current (when (= href active) "page")} label])]
        [:div#status {:hx-get "/status" :hx-trigger "load, every 5s" :hx-swap "innerHTML"}]]
       [:main [:h1 title] body]]])))
 
 ;;; --- event cards ----------------------------------------------------------
 
-(def verdict-labels {"like" "👍 Interested" "booked" "✓ Booked" "dislike" "👎 Not for me" "hidden" "Hidden"})
+(def verdict-labels (array-map "love" "⭐ Must go" "booked" "✓ Booked" "like" "👍 Interested"
+                                "meh" "😐 Meh" "dislike" "👎 Not for me"))
+
+(def ^:private rating-buttons
+  ;; verdict, button, tooltip; in the order shown
+  [["dislike" "👎" "Not for me"] ["meh" "😐" "Meh"] ["like" "👍" "Interested"] ["love" "⭐" "Must go"]])
 
 (defn- feedback-button
   "`view` is \"card\" or \"row\": the server sends back the same kind of element to swap in."
@@ -89,6 +94,16 @@
              :title tip :aria-label tip}
     label]))
 
+(defn- hide-button
+  "Hiding is separate from rating: it only says 'don't show me this'."
+  [view key hidden? label]
+  [:button {:hx-post "/hide"
+            :hx-vals (json/generate-string {:key key :view view :hidden (not hidden?)})
+            :hx-target "closest .item" :hx-swap "outerHTML"
+            :aria-pressed (str (boolean hidden?))
+            :title (if hidden? "Show again" "Don't show me this") :aria-label (if hidden? "Unhide" "Hide")}
+   label])
+
 (defn- similar-href [key] (str "/find?like=" (java.net.URLEncoder/encode key "UTF-8")))
 
 (defn- why-text [{:keys [because unlike title]}]
@@ -100,33 +115,35 @@
 
 (defn- dismissed-card [item verdict]
   [:article.card.item.dismissed {:id (str "c-" (short-id (:key item)))}
-   [:p (verdict-labels verdict) ": " (:title item) " "
-    (feedback-button "card" (:key item) verdict verdict "Undo")]])
+   (if (:hidden? item)
+     [:p "Hidden: " (:title item) " " (hide-button "card" (:key item) true "Undo")]
+     [:p (verdict-labels verdict) ": " (:title item) " "
+      (feedback-button "card" (:key item) verdict verdict "Undo")])])
 
 (declare extra-links)
 
 (defn card
-  "One event. `shown-dates` are the performances relevant to the current view."
+  "One event. `shown-dates` are the performances relevant to the current view.
+  An item with :hidden? set (just hidden) shows collapsed, as does a dislike."
   ([item verdict] (card item verdict (:dates item)))
   ([item verdict shown-dates]
-   (if (#{"dislike" "hidden"} verdict)
+   (if (or (:hidden? item) (= "dislike" verdict))
      (dismissed-card item verdict)
      (let [{:keys [key title subtitle venue description url]} item
            shown (take 4 shown-dates)
            more (- (count shown-dates) (count shown))
            first-booking (some :booking_url shown)
            paras (remove str/blank? (str/split (or description "") #"\n\n+"))
-           why (why-text item)]
+           why (or (:learn-why item) (why-text item))]
        [:article.card.item {:id (str "c-" (short-id key))}
         [:div.head
          [:h2 [:a {:href (or first-booking url)} title]
           (when subtitle [:span.sub " " subtitle])
-          (when (#{"like" "booked"} verdict) [:span.badge (verdict-labels verdict)])]
+          (when verdict [:span.badge (verdict-labels verdict)])]
          [:div.actions
-          (feedback-button "card" key "like" verdict "👍" "Interested")
-          (feedback-button "card" key "dislike" verdict "👎" "Not for me")
+          (for [[v label tip] rating-buttons] (feedback-button "card" key v verdict label tip))
           (feedback-button "card" key "booked" verdict "Booked")
-          (feedback-button "card" key "hidden" verdict "Hide")
+          (hide-button "card" key false "Hide")
           [:a.more {:href (similar-href key)} "Similar"]]]
         [:p.meta
          [:span.when (str/join ", " (map date-str shown))
@@ -162,10 +179,12 @@
   ([item verdict shown-dates]
    (let [{:keys [key title subtitle venue description url rank qsim window]} item
          id (str "r-" (short-id key))]
-     (if (#{"dislike" "hidden"} verdict)
+     (if (or (:hidden? item) (= "dislike" verdict))
        [:tr.item.dismissed {:id id :hx-vals (when window (json/generate-string window))}
-        [:td {:colspan 10} (verdict-labels verdict) ": " title " "
-         (feedback-button "row" key verdict verdict "Undo")]]
+        (if (:hidden? item)
+          [:td {:colspan 12} "Hidden: " title " " (hide-button "row" key true "Undo")]
+          [:td {:colspan 12} (verdict-labels verdict) ": " title " "
+           (feedback-button "row" key verdict verdict "Undo")])]
        (let [paras (remove str/blank? (str/split (or description "") #"\n\n+"))
              why (why-text item)
              more (dec (count shown-dates))]
@@ -176,7 +195,7 @@
           [:td.ev
            [:a {:href (or (some :booking_url shown-dates) url)} title]
            (when subtitle [:span.sub " " subtitle])
-           (when (#{"like" "booked"} verdict) [:span.badge (verdict-labels verdict)])
+           (when verdict [:span.badge (verdict-labels verdict)])
            [:details
             [:summary "details"]
             (when (pos? more)
@@ -191,18 +210,20 @@
           [:td (rank/kind-labels (rank/kind item))]
           [:td.price (price-str item)]
           ;; one column per action, so the buttons line up down the table
-          [:td.act (feedback-button "row" key "like" verdict "👍" "Interested")]
-          [:td.act (feedback-button "row" key "dislike" verdict "👎" "Not for me")]
+          (for [[v label tip] rating-buttons] [:td.act (feedback-button "row" key v verdict label tip)])
           [:td.act (feedback-button "row" key "booked" verdict "✓" "Booked")]
-          [:td.act (feedback-button "row" key "hidden" verdict "✕" "Hide")]
+          [:td.act (hide-button "row" key false "✕")]
           [:td.act [:a.button {:href (similar-href key) :title "More like this" :aria-label "More like this"} "≈"]]])))))
 
 ;;; --- context shared by the pages ------------------------------------------
 
 (defn- ctx [ds]
-  {:items (store/items ds)
-   :verdicts (store/feedback-map ds)
-   :examples (vec (rank/examples ds))})
+  (let [examples (vec (rank/examples ds))]
+    {:items (store/items ds)
+     :verdicts (store/feedback-map ds)
+     :hidden (store/hidden-keys ds)
+     :examples examples
+     :model (rank/model ds examples)}))
 
 (defn- no-taste-note [examples]
   (when-not (some #(pos? (:weight %)) examples)
@@ -216,11 +237,12 @@
 (def plan-excluded-kinds #{:film :exhibition})
 
 (defn plan-page [ds _params]
-  (let [{:keys [items verdicts examples]} (ctx ds)
+  (let [{:keys [items verdicts hidden examples model]} (ctx ds)
         from (.plusDays (today) plan-lead-days)
         candidates (->> items
                         (remove #(plan-excluded-kinds (rank/kind %)))
-                        (remove #(#{"dislike" "hidden" "booked"} (verdicts (:key %))))
+                        (remove #(#{"dislike" "meh" "booked"} (verdicts (:key %))))
+                        (remove #(hidden (:key %)))
                         ;; worth booking ahead: a ticketed one-off or short run
                         (remove #(and (:price_max %) (zero? (:price_max %))))
                         (remove #(some (fn [d] (when-let [e (->date (:end_date d))]
@@ -229,7 +251,7 @@
                         (keep #(let [ds* (dates-in % from (.plusYears from 1))]
                                  (when (and (seq ds*) (not (all-sold-out? ds*)))
                                    (assoc % :shown ds*)))))
-        scored (rank/score-items ds candidates {:examples examples})
+        scored (rank/score-items ds candidates {:model model})
         by-month (group-by #(subs (:start_date (first (:shown %))) 0 7) scored)
         booked (->> items (filter #(= "booked" (verdicts (:key %)))) (sort-by #(:start_date (first (:dates %)))))]
     (page "Plan ahead" "/plan"
@@ -350,7 +372,7 @@
      [:script (h/raw range-script)]]))
 
 (defn find-page [ds params]
-  (let [{:keys [items verdicts examples]} (ctx ds)
+  (let [{:keys [items verdicts hidden examples model]} (ctx ds)
         p #(let [v (get params %)] (when-not (str/blank? v) (str/trim v)))
         like-key (p "like")
         like-item (when like-key (first (filter #(= like-key (:key %)) items)))
@@ -367,7 +389,8 @@
                     like-item (@store/vectors (:hash like-item))
                     q (store/vector-for ds (str embed/query-prefix q)))
         filtered (->> items
-                      (remove #(#{"dislike" "hidden"} (verdicts (:key %))))
+                      (remove #(= "dislike" (verdicts (:key %))))
+                      (remove #(hidden (:key %)))
                       (remove #(= like-key (:key %)))
                       (filter #(or (empty? kinds) (kinds (rank/kind %))))
                       (filter #(or (nil? max-price) (nil? (:price_min %)) (<= (:price_min %) max-price)))
@@ -377,7 +400,7 @@
                             (when (and (seq ds*) (or include-sold-out? (not (all-sold-out? ds*))))
                               (assoc % :shown ds* :window window)))
                          filtered)
-        results (->> (rank/score-items ds candidates {:examples examples :query-vec query-vec :q q})
+        results (->> (rank/score-items ds candidates {:model model :query-vec query-vec :q q})
                      (sort-by :rank >)
                      (take n))
         checked? #(contains? kinds %)
@@ -417,35 +440,45 @@
                          "; showing the best " (count results) ".")]
           (when (seq results)
             [:table.results
-             [:thead [:tr [:th "When"] [:th "Event"] [:th "Venue"] [:th "Type"] [:th "Price"] [:th {:colspan 5} [:span.sr "Actions"]]]]
+             [:thead [:tr [:th "When"] [:th "Event"] [:th "Venue"] [:th "Type"] [:th "Price"] [:th {:colspan 7} [:span.sr "Actions"]]]]
              [:tbody (for [e results] (row e (verdicts (:key e)) (:shown e)))]]))))
 
 ;;; --- Quick rate ---------------------------------------------------------------
 
-(defn rate-page [ds _params]
-  (let [{:keys [items verdicts]} (ctx ds)
+(defn rate-page [ds params]
+  (let [{:keys [items verdicts hidden model]} (ctx ds)
+        random? (= "random" (get params "mode"))
         unrated (->> items
                      (remove #(verdicts (:key %)))
+                     (remove #(hidden (:key %)))
                      (filter :description)
                      (filter #(@store/vectors (:hash %))))
-        ;; a spread across kinds, shuffled within each kind
-        by-kind (vals (group-by rank/kind (shuffle unrated)))
-        ;; round-robin: one of each kind, then a second of each, …
-        sample (->> (range 3)
-                    (mapcat (fn [i] (keep #(nth % i nil) by-kind)))
-                    (take 12))]
-    (page "Quick rate" "/rate"
-          [:p.intro "A random spread of upcoming events. Mark anything that appeals or doesn't; "
-           "skip anything you're neutral about. Every rating sharpens the suggestions."]
+        sample (if random?
+                 ;; a spread across kinds, shuffled within each kind; round-robin:
+                 ;; one of each kind, then a second of each, …
+                 (let [by-kind (vals (group-by rank/kind (shuffle unrated)))]
+                   (->> (range 3)
+                        (mapcat (fn [i] (keep #(nth % i nil) by-kind)))
+                        (take 12)))
+                 (rank/learning-batch model unrated 12))]
+    (page (if random? "Quick rate" "Help me learn") "/rate"
+          (if random?
+            [:p.intro "A random spread of upcoming events. Rate anything you have a view on. "
+             [:a {:href "/rate"} "Or help the model learn"] " with the events it's least sure about."]
+            [:p.intro "The events whose ratings would teach the model most: ones it can't place between "
+             "things you liked and things you didn't, and ones unlike anything you've rated yet. "
+             "😐 is a useful answer. Hide only says “don't show me this”; it isn't a rating. "
+             [:a {:href "/rate?mode=random"} "Random spread instead"] "."])
           (for [e (remove nil? sample)] (card e nil))
-          [:p [:a.button {:href "/rate"} "Show me another batch"]])))
+          [:p [:a.button {:href (if random? "/rate?mode=random" "/rate")} "Show me another batch"]])))
 
 ;;; --- Taste -------------------------------------------------------------------
 
 (defn taste-page [ds _params]
   (let [fb (store/feedback ds)
         stmts (store/statements ds)
-        hist (store/history ds)]
+        hist (store/history ds)
+        hidden (store/hidden ds)]
     (page "My taste" "/taste"
           [:section
            [:h2 "Things I like (or don't)"]
@@ -473,30 +506,54 @@
            [:h2 "Ratings"]
            (if (empty? fb)
              [:p "None yet."]
-             (for [[verdict rows] (sort-by key (group-by :verdict fb))]
-               [:details [:summary (str (verdict-labels verdict) " (" (count rows) ")")]
-                [:ul (for [{:keys [key title venue]} rows]
-                       [:li title (when venue (str " · " venue)) " "
-                        [:form.inline {:method "post" :action "/feedback/clear"}
-                         [:input {:type "hidden" :name "key" :value key}]
-                         [:button "Undo"]]])]]))])))
+             (let [by-verdict (group-by :verdict fb)]
+               (for [verdict (keys verdict-labels)
+                     :let [rows (by-verdict verdict)]
+                     :when rows]
+                 [:details [:summary (str (verdict-labels verdict) " (" (count rows) ")")]
+                  [:ul (for [{:keys [key title venue]} rows]
+                         [:li title (when venue (str " · " venue)) " "
+                          [:form.inline {:method "post" :action "/feedback/clear"}
+                           [:input {:type "hidden" :name "key" :value key}]
+                           [:button "Undo"]]])]])))]
+          (when (seq hidden)
+            [:section
+             [:h2 "Hidden"]
+             [:p "Events you asked not to see. Hiding isn't a rating, so these don't affect suggestions."]
+             [:details [:summary (str (count hidden) " hidden")]
+              [:ul (for [{:keys [key title venue]} hidden]
+                     [:li title (when venue (str " · " venue)) " "
+                      [:form.inline {:method "post" :action "/hidden/clear"}
+                       [:input {:type "hidden" :name "key" :value key}]
+                       [:button "Show again"]]])]]]))))
 
 ;;; --- actions ---------------------------------------------------------------
 
+(defn- render-item
+  "The card or row for `key` after a change, to swap in where it was."
+  [ds item {:strs [view from to time]}]
+  (let [v ((store/feedback-map ds) (:key item))
+        item (assoc item :hidden? (contains? (store/hidden-keys ds) (:key item)))]
+    (str (h/html
+          (if (= "row" view)
+            ;; keep the search's dates (sent back via the row's hx-vals); the score isn't recomputed
+            (let [shown (filter (partial time-ok? time) (dates-in item (->date from) (->date to)))]
+              (row (assoc item :window {:from from :to to :time time}) v (if (seq shown) shown (:dates item))))
+            (card item v))))))
+
+(defn- item-for [ds key] (first (filter #(= key (:key %)) (store/items ds))))
+
 (defn feedback! [ds params]
   (let [key (get params "key")
-        verdict (get params "verdict")
-        item (first (filter #(= key (:key %)) (store/items ds)))
-        {:strs [view from to time]} params]
-    (store/set-feedback! ds (or item {:key key}) verdict)
-    (when item
-      (let [v (when-not (= "none" verdict) verdict)]
-        (str (h/html
-              (if (= "row" view)
-                ;; keep the search's dates (sent back via the row's hx-vals); the score isn't recomputed
-                (let [shown (filter (partial time-ok? time) (dates-in item (->date from) (->date to)))]
-                  (row (assoc item :window {:from from :to to :time time}) v (if (seq shown) shown (:dates item))))
-                (card item v))))))))
+        item (item-for ds key)]
+    (store/set-feedback! ds (or item {:key key}) (get params "verdict"))
+    (when item (render-item ds item params))))
+
+(defn hide! [ds params]
+  (let [key (get params "key")
+        item (item-for ds key)]
+    (store/set-hidden! ds (or item {:key key}) (= "true" (str (get params "hidden"))))
+    (when item (render-item ds item params))))
 
 (defn add-history-lines! [ds text]
   (doseq [line (str/split-lines (or text ""))

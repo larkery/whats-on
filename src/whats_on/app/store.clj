@@ -20,7 +20,7 @@
    ;; a film covers all its screenings, and survives after the event has passed
    "create table if not exists feedback (
       key text primary key,
-      verdict text not null,       -- like | dislike | booked | hidden
+      verdict text not null,       -- dislike | meh | like | love | booked
       title text, venue text, start_date text, url text,
       text text,                   -- the text that was embedded, kept for retraining
       text_hash text,
@@ -34,7 +34,17 @@
       id integer primary key,
       title text not null,
       venue text, date text, notes text,
-      created_at text not null)"])
+      created_at text not null)"
+   ;; 'don't show me this', separate from taste: hiding says nothing about
+   ;; whether you'd like it (seen it, can't go, …)
+   "create table if not exists hidden (
+      key text primary key,
+      title text, venue text,
+      created_at text not null)"
+   ;; hiding used to be a feedback verdict
+   "insert or ignore into hidden (key, title, venue, created_at)
+      select key, title, venue, updated_at from feedback where verdict = 'hidden'"
+   "delete from feedback where verdict = 'hidden'"])
 
 (defn sha1 [s]
   (let [d (.digest (MessageDigest/getInstance "SHA-1") (.getBytes (str s) "UTF-8"))]
@@ -147,6 +157,16 @@
                         on conflict(key) do update set verdict = excluded.verdict, updated_at = excluded.updated_at"
                        (:key item) verdict (:title item) (:venue item) (:start_date item)
                        (:url item) (:text item) (:hash item) (now)])))
+
+(defn hidden [ds] (q ds ["select * from hidden order by created_at desc"]))
+
+(defn hidden-keys [ds] (set (map :key (hidden ds))))
+
+(defn set-hidden! [ds item hidden?]
+  (if hidden?
+    (jdbc/execute! ds ["insert or ignore into hidden (key, title, venue, created_at) values (?,?,?,?)"
+                       (:key item) (:title item) (:venue item) (now)])
+    (jdbc/execute! ds ["delete from hidden where key = ?" (:key item)])))
 
 (defn statements [ds] (q ds ["select * from statements order by created_at desc"]))
 

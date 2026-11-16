@@ -106,59 +106,40 @@
   [name pred scorer]
   {:name name :fit (fn [train pool] ((:fit scorer) (remove pred train) pool))})
 
-(defn mean-vec ^floats [vecs]
-  (let [n (count vecs)
-        acc (double-array embed/dim)]
-    (doseq [^floats v vecs] (dotimes [i embed/dim] (aset acc i (+ (aget acc i) (aget v i)))))
-    (float-array (map #(/ % n) acc))))
-
-(defn center
-  "v − mean, renormalised so cosine is still a dot product."
-  ^floats [^floats mu ^floats v]
-  (let [out (float-array embed/dim)]
-    (dotimes [i embed/dim] (aset out i (- (aget v i) (aget mu i))))
-    (let [n (Math/sqrt (areduce out i acc 0.0 (+ acc (* (aget out i) (aget out i)))))]
-      (dotimes [i embed/dim] (aset out i (float (/ (aget out i) n)))))
-    out))
-
-(defn- quantile [xs q]
-  (let [v (vec (sort xs))] (v (min (dec (count v)) (long (* q (count v)))))))
-
-(defn- sims-sample
-  "Similarities between the examples and every 10th pool event."
-  [examples pool]
-  (for [e examples, v (take-nth 10 pool)] (embed/cosine (:vec e) v)))
-
 (defn centered
   "Subtract the pool's mean vector from everything before comparing. bge's
   vectors share a big common component (unrelated texts sit at ~0.6 cosine);
   removing it should spread similarities out and weaken hubs.
-  `threshold` is taste-score's strong-sim: a number, or :matched to move it to
-  the same quantile of example–event similarity that 0.62 is in raw space, so
-  the dislike penalty stays as selective as before."
+  `threshold` is the dislike penalty's similarity: a number, or :matched to
+  move it to the same quantile of example–event similarity that 0.62 is in raw
+  space, so the penalty stays as selective as before."
   [name threshold]
   {:name name
    :fit (fn [train pool]
-          (let [mu (mean-vec pool)
-                c (partial center mu)
+          (let [c (partial embed/center (embed/mean-vec pool))
                 train' (mapv #(update % :vec c) train)
-                strong (if (= :matched threshold)
-                         (let [raw (sims-sample train pool)
-                               share-below (/ (count (filter #(< % rank/strong-sim) raw)) (count raw))]
-                           (quantile (sims-sample train' (map c pool)) share-below))
-                         threshold)]
-            (fn [v] (:score (rank/taste-score train' (c v) strong)))))})
+                penalty-sim (if (= :matched threshold)
+                              (rank/matched-sim train train' pool c rank/strong-sim)
+                              threshold)]
+            (fn [v] (:score (rank/taste-score train' (c v) {:penalty-sim penalty-sim})))))})
 
 (def no-penalty
   ;; a dislike never counts against an event
   ##Inf)
 
+(def app
+  ;; exactly what the app runs (rank/taste-model + rank/model-score)
+  {:name "app"
+   :fit (fn [train pool]
+          (let [m (rank/taste-model train pool)]
+            (fn [v] (:score (rank/model-score m v)))))})
+
 (def scorers
   [baseline
    {:name "baseline, no penalty"
-    :fit (fn [train _pool] (fn [v] (:score (rank/taste-score train v no-penalty))))}
+    :fit (fn [train _pool] (fn [v] (:score (rank/taste-score train v {:penalty-sim no-penalty}))))}
    (centered "centered" :matched)
-   (centered "centered, no penalty" no-penalty)])
+   app])
 
 (def booking-ablations
   [baseline
@@ -197,9 +178,25 @@
 
 ;;; --- metrics ----------------------------------------------------------------
 
-(def positive? #{"like" "booked"})
+(def positive? #{"like" "love" "booked"})
+
+;; graded preference, for concordance
+(def level {"love" 3 "booked" 3 "like" 2 "meh" 1 "dislike" 0})
 
 (defn- mean [xs] (when (seq xs) (/ (reduce + xs) (count xs))))
+
+(defn concordance
+  "Over pairs of held-out events with different levels (⭐/✓ > 👍 > 😐 > 👎):
+  the share the model orders the same way, ties counting half."
+  [results]
+  (let [rs (vec (filter #(level (:verdict %)) results))
+        pairs (for [i (range (count rs)) j (range (inc i) (count rs))
+                    :let [a (rs i) b (rs j)
+                          d (compare (level (:verdict a)) (level (:verdict b)))]
+                    :when (not (zero? d))]
+                (let [p (compare (:pct a) (:pct b))]
+                  (cond (zero? p) 0.5 (= p d) 1.0 :else 0.0)))]
+    (mean pairs)))
 
 (defn auc
   "P(a random positive outranks a random dislike), on LOO percentiles."
@@ -211,12 +208,13 @@
          (* (count pos) (count neg))))))
 
 (defn summary [results]
-  (into {:auc (auc results)}
+  (into {:auc (auc results) :concordance (concordance results)}
         (for [[label pred] [["positive" (comp positive? :verdict)]
+                            ["love" #(= "love" (:verdict %))]
                             ["like" #(= "like" (:verdict %))]
                             ["booked" #(= "booked" (:verdict %))]
-                            ["dislike" #(= "dislike" (:verdict %))]
-                            ["hidden" #(= "hidden" (:verdict %))]]
+                            ["meh" #(= "meh" (:verdict %))]
+                            ["dislike" #(= "dislike" (:verdict %))]]
               :let [pcts (map :pct (filter pred results))]
               :when (seq pcts)]
           [label (into {:n (count pcts) :mean-pct (mean pcts)}
@@ -281,16 +279,16 @@
 (defn- fmt-pct [x] (if x (format "%5.1f" (* 100.0 x)) "    -"))
 
 (defn print-summaries [rows]
-  (println (format "%-26s %-8s %5s | %-17s | %-17s | %-17s | %-11s"
-                   "scorer" "mode" "AUC" "like  pct top3 10" "booked pct top3 10"
-                   "dislike pct top3 10" "hidden pct"))
+  (println (format "%-26s %-8s %5s %5s | %-17s | %-17s | %-17s | %-17s | %-8s"
+                   "scorer" "mode" "AUC" "conc" "love pct top3 10" "like  pct top3 10" "booked pct top3 10"
+                   "dislike pct top3 10" "meh pct"))
   (doseq [{:keys [scorer mode summary]} rows
-          :let [{:strs [like booked dislike hidden]} summary
+          :let [{:strs [love like booked meh dislike]} summary
                 cell (fn [{:keys [mean-pct top3 top10]}]
                        (str (fmt-pct mean-pct) " " (fmt-pct top3) " " (fmt-pct top10)))]]
-    (println (format "%-26s %-8s %5s | %-17s | %-17s | %-17s | %-11s"
-                     scorer (name mode) (fmt-pct (:auc summary))
-                     (cell like) (cell booked) (cell dislike) (fmt-pct (:mean-pct hidden))))))
+    (println (format "%-26s %-8s %5s %5s | %-17s | %-17s | %-17s | %-17s | %-8s"
+                     scorer (name mode) (fmt-pct (:auc summary)) (fmt-pct (:concordance summary))
+                     (cell love) (cell like) (cell booked) (cell dislike) (fmt-pct (:mean-pct meh))))))
 
 (defn- csv-cell [x]
   (let [s (str x)] (if (re-find #"[\",\n]" s) (str "\"" (str/replace s "\"" "\"\"") "\"") s)))
@@ -336,8 +334,8 @@
        (println (format "  %4.0f%%  %s · %s" (* 100 share) title venue)))
      (println (format "\nk-occurrence skew of pool embeddings (k=10): raw %.2f, centered %.2f"
                       (k-occurrence-skew (:pool-vecs snap) 10)
-                      (let [mu (mean-vec (:pool-vecs snap))]
-                        (k-occurrence-skew (map (partial center mu) (:pool-vecs snap)) 10))))
+                      (let [mu (embed/mean-vec (:pool-vecs snap))]
+                        (k-occurrence-skew (map (partial embed/center mu) (:pool-vecs snap)) 10))))
      (println "\nPer-item results:" (write-results! snap version rows))
      rows)))
 

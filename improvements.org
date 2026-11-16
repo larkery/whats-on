@@ -120,19 +120,7 @@
    4. grouping (dupe clusters) + paired comparison
    5. first ablation: baseline ± booked (sparse / rich / both)
    6. hubness diagnostics
-2. subtract mean from vectors
-3. compute z-scores for examples hubness correction (e.g.
-    CSLS, from cross-lingual word embeddings). The idea is to discount
-    items that are close to everything.
-4. Weigh likes against dislikes directly. Replace "positives minus a
-     thresholded penalty" with something like mean(top-k pos) −
-     λ·mean(top-k neg). A further step, once you have about 50 ratings
-     (you have 46): a logistic regression or linear SVM on the 384-d
-     vectors, trained on like/booked (+), dislike/hidden (−) and a random
-     sample of unrated events as weak negatives. Blend it with the kNN
-     score. It learns which directions matter to you; for example, it can
-     tell "venue" apart from "subject matter".
-5. clean text better
+2. clean text better
 
    1. normalise text
    2. split on all sensible split markers
@@ -141,6 +129,24 @@
 
    this is done per-source not across the dataset as the sources have
    template strings
+
+   Tried 2026-11-16, parked on branch =text-cleaning= (templates learned
+   per source and per source+venue, since headfirst boilerplate is
+   per venue). Grouped LOO: positives −1.5 to −2.7 pct points, dislikes
+   −2.8 to −4.2, AUC flat; hubness unchanged. Half the drop comes from
+   normalising alone. Guess: venue boilerplate carries a real venue→taste
+   signal. Revisit alongside 5. with venue as an explicit feature.
+3. subtract mean from vectors
+4. compute z-scores for examples - ? hubness correction (e.g.
+    CSLS, from cross-lingual word embeddings).
+5. Weigh likes against dislikes directly. Replace "positives minus a
+     thresholded penalty" with something like mean(top-k pos) −
+     λ·mean(top-k neg). A further step, once you have about 50 ratings
+     (you have 46): a logistic regression or linear SVM on the 384-d
+     vectors, trained on like/booked (+), dislike/hidden (−) and a random
+     sample of unrated events as weak negatives. Blend it with the kNN
+     score. It learns which directions matter to you; for example, it can
+     tell "venue" apart from "subject matter".
 6. show most confounding examples in ui for boosting training
 
    

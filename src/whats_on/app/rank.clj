@@ -51,7 +51,7 @@
          :let [w (verdict-weights verdict)]
          :when (and w (not (str/blank? text)))]
      {:vec (store/vector-for ds text) :weight w
-      :key key :verdict verdict :title title
+      :key key :verdict verdict :title title :venue venue
       :label (str title (when venue (str " at " venue)))
       :why (cond (neg? w) "you disliked" (zero? w) "you were meh about" :else "you liked")})
    (for [{:keys [text weight]} (store/statements ds)]
@@ -60,7 +60,7 @@
       :label (str "“" text "”") :why "you said"})
    (for [{:keys [title venue notes]} (store/history ds)]
      {:vec (store/vector-for ds (str/join ". " (remove str/blank? [title (some->> venue (str "at ")) notes])))
-      :weight 1.5 :title title
+      :weight 1.5 :title title :venue venue
       :label (str title (when venue (str " at " venue))) :why "you went to"})))
 
 (def ^:private top-k 3)

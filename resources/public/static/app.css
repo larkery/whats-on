@@ -114,7 +114,8 @@ ul.booked li { margin: 0.1rem 0; }
 table.results { width: 100%; border-collapse: collapse; font-size: 0.9rem; line-height: 1.3; margin-top: 0.2rem; }
 .results th { text-align: left; font-size: 0.8rem; color: var(--muted); font-weight: 600; border-bottom: 2px solid var(--fg); padding: 0.1rem 0.35rem; }
 .results td { padding: 0.08rem 0.35rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-.results tbody tr:hover { background: var(--soft); }
+.results tbody.item:hover { background: var(--soft); }
+.results tbody.item:not(.dismissed) > tr:first-child { cursor: pointer; }
 .results td.when { white-space: nowrap; font-weight: 600; }
 .results .more-dates { color: var(--muted); font-weight: normal; }
 .results td.ev { width: 100%; }
@@ -126,10 +127,12 @@ table.results { width: 100%; border-collapse: collapse; font-size: 0.9rem; line-
 .results td:nth-child(4), .results td.price { white-space: nowrap; }
 .results td.act { padding: 0.05rem 0.1rem; width: 1px; }
 .results td.act button, .results td.act .button { display: block; width: 1.9rem; padding: 0; text-align: center; font-size: 0.85rem; line-height: 1.35rem; }
-/* "details" sits on the title's line until opened */
-.results details { display: inline; margin: 0; }
-.results summary { display: inline; color: var(--muted); font-size: 0.75rem; margin-left: 0.4rem; }
-.results details[open] { display: block; margin-bottom: 0.3rem; }
-.results details p { margin: 0.2rem 0; max-width: 52rem; }
-.results tr.dismissed td { color: var(--muted); }
+/* "details" sits on the title's line and opens a full-width line underneath */
+.results button.toggle { display: inline; border: 0; background: none; padding: 0; margin-left: 0.4rem;
+                         color: var(--muted); font-size: 0.75rem; cursor: pointer; }
+.results button.toggle:hover { text-decoration: underline; }
+.results tbody.item:has(tr.detail:not([hidden])) > tr:first-child td { border-bottom: 0; }
+.results tr.detail td { padding: 0.1rem 0.35rem 0.5rem; }
+.results tr.detail p { margin: 0.2rem 0; max-width: 70rem; }
+.results tbody.dismissed td { color: var(--muted); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

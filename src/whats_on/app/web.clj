@@ -174,30 +174,43 @@
          (when-let [e (->date end_date)] (str "–" (fmt e "d MMM"))))))
 
 (defn row
-  "One event as a table row, for the dense Find results. Details are folded away."
+  "One event for the dense Find results: its own <tbody>, holding the event's
+  line and a full-width details line underneath, folded away until the
+  'details' toggle opens it (see details-script). Buttons swap the whole tbody."
   ([item verdict] (row item verdict (:dates item)))
   ([item verdict shown-dates]
    (let [{:keys [key title subtitle venue description url rank qsim window]} item
-         id (str "r-" (short-id key))]
+         attrs {:id (str "r-" (short-id key)) :hx-vals (when window (json/generate-string window))}]
      (if (or (:hidden? item) (= "dislike" verdict))
-       [:tr.item.dismissed {:id id :hx-vals (when window (json/generate-string window))}
-        (if (:hidden? item)
-          [:td {:colspan 12} "Hidden: " title " " (hide-button "row" key true "Undo")]
-          [:td {:colspan 12} (verdict-labels verdict) ": " title " "
-           (feedback-button "row" key verdict verdict "Undo")])]
+       [:tbody.item.dismissed attrs
+        [:tr
+         (if (:hidden? item)
+           [:td {:colspan 12} "Hidden: " title " " (hide-button "row" key true "Undo")]
+           [:td {:colspan 12} (verdict-labels verdict) ": " title " "
+            (feedback-button "row" key verdict verdict "Undo")])]]
        (let [paras (remove str/blank? (str/split (or description "") #"\n\n+"))
              why (why-text item)
              more (dec (count shown-dates))]
-         [:tr.item {:id id :hx-vals (when window (json/generate-string window))}
-          [:td.when (short-date (first shown-dates))
-           (when (pos? more) [:span.more-dates (str " +" more)])
-           (when (all-sold-out? shown-dates) [:strong " sold out"])]
-          [:td.ev
-           [:a {:href (or (some :booking_url shown-dates) url)} title]
-           (when subtitle [:span.sub " " subtitle])
-           (when verdict [:span.badge (verdict-labels verdict)])
-           [:details
-            [:summary "details"]
+         [:tbody.item attrs
+          [:tr
+           [:td.when (short-date (first shown-dates))
+            (when (pos? more) [:span.more-dates (str " +" more)])
+            (when (all-sold-out? shown-dates) [:strong " sold out"])]
+           [:td.ev
+            [:a {:href (or (some :booking_url shown-dates) url)} title]
+            (when subtitle [:span.sub " " subtitle])
+            (when verdict [:span.badge (verdict-labels verdict)])
+            [:button.toggle {:type "button" :aria-expanded "false"} "details"]]
+           [:td venue]
+           [:td (rank/kind-labels (rank/kind item))]
+           [:td.price (price-str item)]
+           ;; one column per action, so the buttons line up down the table
+           (for [[v label tip] rating-buttons] [:td.act (feedback-button "row" key v verdict label tip)])
+           [:td.act (feedback-button "row" key "booked" verdict "✓" "Booked")]
+           [:td.act (hide-button "row" key false "✕")]
+           [:td.act [:a.button {:href (similar-href key) :title "More like this" :aria-label "More like this"} "≈"]]]
+          [:tr.detail {:hidden true}
+           [:td {:colspan 12}
             (when (pos? more)
               [:p.dates "Dates: " (str/join ", " (map short-date shown-dates))])
             (when (and rank (>= rank 0))
@@ -205,15 +218,23 @@
                (when qsim (format " (search %.2f)" (double qsim)))
                (when why (str ". " why))])
             (for [p paras] [:p p])
-            (extra-links item)]]
-          [:td venue]
-          [:td (rank/kind-labels (rank/kind item))]
-          [:td.price (price-str item)]
-          ;; one column per action, so the buttons line up down the table
-          (for [[v label tip] rating-buttons] [:td.act (feedback-button "row" key v verdict label tip)])
-          [:td.act (feedback-button "row" key "booked" verdict "✓" "Booked")]
-          [:td.act (hide-button "row" key false "✕")]
-          [:td.act [:a.button {:href (similar-href key) :title "More like this" :aria-label "More like this"} "≈"]]])))))
+            (extra-links item)]]])))))
+
+(def ^:private details-script
+  ;; open/close an event's full-width details line in the Find results: the
+  ;; 'details' toggle, or a click anywhere else on the event's line except its
+  ;; links and buttons (and not when selecting text)
+  "document.addEventListener('click', e => {
+     const line = e.target.closest('.results tbody.item > tr:first-child');
+     if (!line) return;
+     const b = line.querySelector('button.toggle');
+     const t = e.target.closest('a, button, input, select');
+     if (!b || (t && t !== b) || String(getSelection())) return;
+     const d = line.parentElement.querySelector('tr.detail');
+     d.hidden = !d.hidden;
+     b.setAttribute('aria-expanded', String(!d.hidden));
+     b.textContent = d.hidden ? 'details' : 'less';
+   });")
 
 ;;; --- context shared by the pages ------------------------------------------
 
@@ -411,10 +432,10 @@
         ;; infinite scroll: the last row fetches the next page when it comes into view
         rows (concat (for [e results] (row e (verdicts (:key e)) (:shown e)))
                      (when (< (+ offset find-page-size) (count candidates))
-                       [[:tr.more {:hx-get (str "/find?" (query-string (assoc params "offset" (+ offset find-page-size)
-                                                                              "fragment" "rows")))
-                                   :hx-trigger "revealed" :hx-swap "outerHTML"}
-                         [:td {:colspan 12} "Loading more…"]]]))
+                       [[:tbody.more {:hx-get (str "/find?" (query-string (assoc params "offset" (+ offset find-page-size)
+                                                                                 "fragment" "rows")))
+                                      :hx-trigger "revealed" :hx-swap "outerHTML"}
+                         [:tr [:td {:colspan 12} "Loading more…"]]]]))
         checked? #(contains? kinds %)
         ;; the calendar keeps every other filter and only changes the dates
         keep-params (dissoc params "from" "to" "offset" "fragment")
@@ -463,7 +484,8 @@
           (when (seq rows)
             [:table.results
              [:thead [:tr [:th "When"] [:th "Event"] [:th "Venue"] [:th "Type"] [:th "Price"] [:th {:colspan 7} [:span.sr "Actions"]]]]
-             [:tbody rows]]))))
+             rows])
+          [:script (h/raw details-script)])))
 
 ;;; --- Quick rate ---------------------------------------------------------------
 

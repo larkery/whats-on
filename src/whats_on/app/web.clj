@@ -8,7 +8,7 @@
             [whats-on.app.store :as store])
   (:import [java.time DayOfWeek LocalDate]
            [java.time.format DateTimeFormatter]
-           [java.time.temporal TemporalAdjusters]))
+           [java.time.temporal IsoFields]))
 
 (defonce status (atom {:embedded 0 :total 0}))
 
@@ -298,22 +298,6 @@
 
 ;;; --- Find ---------------------------------------------------------------------
 
-(defn- weekend-from [^LocalDate d]
-  (if (#{DayOfWeek/SATURDAY DayOfWeek/SUNDAY} (.getDayOfWeek d))
-    d
-    (.with d (TemporalAdjusters/next DayOfWeek/SATURDAY))))
-
-(defn- quick-ranges []
-  (let [t (today)
-        sat (weekend-from t)
-        next-sat (.plusDays (if (= DayOfWeek/SUNDAY (.getDayOfWeek sat)) (.minusDays sat 1) sat) 7)]
-    [["Today" t t]
-     ["Tomorrow" (.plusDays t 1) (.plusDays t 1)]
-     ["This weekend" sat (.with sat (TemporalAdjusters/nextOrSame DayOfWeek/SUNDAY))]
-     ["Next weekend" next-sat (.plusDays next-sat 1)]
-     ["Next 7 days" t (.plusDays t 6)]
-     ["Next 30 days" t (.plusDays t 29)]]))
-
 (defn- query-string [params]
   (let [enc #(java.net.URLEncoder/encode (str %) "UTF-8")]
     (str/join "&" (for [[k v] (sort-by key params)
@@ -358,10 +342,23 @@
      location = u;
    });")
 
+(defn- week-cell
+  "The ISO week number for a calendar row, linking to that Monday–Sunday
+  (from today, for the current week)."
+  [week ^LocalDate t ^LocalDate from ^LocalDate to href]
+  (let [mon (.with ^LocalDate (first (remove nil? week)) DayOfWeek/MONDAY)
+        sun (.plusDays mon 6)
+        start (if (.isBefore mon t) t mon)
+        n (.get mon IsoFields/WEEK_OF_WEEK_BASED_YEAR)]
+    [:td {:class (str "wk" (when (and (= from start) (= to sun)) " sel"))}
+     (if (.isBefore sun t)
+       [:span n]
+       [:a {:href (href start sun) :title (str "Week " n ": " (fmt start "EEE d MMM") " – " (fmt sun "EEE d MMM"))} n])]))
+
 (defn- calendar [^LocalDate start ^LocalDate from ^LocalDate to counts href]
   (let [t (today)
         busiest (max 1 (reduce max 0 (vals counts)))]
-    [:div.cals {:data-from (str from)}
+    [:div.cals {:id "cals" :data-from (str from)}
      (for [m (range cal-months)
            :let [first-day (.plusMonths start m)
                  days (.lengthOfMonth first-day)
@@ -370,10 +367,11 @@
                  cells (concat (repeat lead nil) (map #(.plusDays first-day %) (range days)))]]
        [:table.cal
         [:caption (fmt first-day "MMMM yyyy")]
-        [:thead [:tr (for [d ["Mo" "Tu" "We" "Th" "Fr" "Sa" "Su"]] [:th d])]]
+        [:thead [:tr [:th.wk "Wk"] (for [d ["Mo" "Tu" "We" "Th" "Fr" "Sa" "Su"]] [:th d])]]
         [:tbody
          (for [week (partition 7 7 (repeat nil) cells)]
            [:tr
+            (week-cell week t from to href)
             (for [^LocalDate d week]
               (if-not d
                 [:td]
@@ -389,10 +387,10 @@
                      [:a {:href (href d d) :data-date (str d)
                           :title (str (fmt d "EEE d MMM") ": " n (if (= 1 n) " event" " events"))}
                       (.getDayOfMonth d)])])))])]])
-     [:p.hint "Click a day to see it; shift-click another to see the range between. Darker days have more on."]
-     [:script (h/raw range-script)]]))
+     [:p.hint "Click a day to see it, or a week number for that week; shift-click another day to see the range between. Darker days have more on."]]))
 
 (def find-page-size 40)
+(def price-slider-max 100)   ; £; the slider's top end means any price
 
 (declare find-page-html)
 
@@ -405,7 +403,8 @@
         to (or (->date (p "to")) (if like-item (.plusDays from 120) from))
         time-of-day (or (p "time") "any")
         kinds (set (keep #(keyword %) (let [k (get params "kind")] (if (string? k) [k] k))))
-        max-price (some-> (p "max_price") parse-double)
+        ;; the slider's top end means no limit
+        max-price (some-> (p "max_price") parse-double (#(when (< % price-slider-max) %)))
         venue (some-> (p "venue") str/lower-case)
         q (p "q")
         offset (or (some-> (p "offset") parse-long) 0)
@@ -453,39 +452,47 @@
     (page (if like-item (str "More like “" (:title like-item) "”") "Find something") "/find"
           [:div.find-top
            (calendar (cal-start from) from to (day-counts filtered time-of-day include-sold-out?) href)
-          [:form.find {:method "get" :action "/find"}
-           (when like-key [:input {:type "hidden" :name "like" :value like-key}])
-           ;; dates are picked on the calendar or the quick links; the form keeps them
-           [:input {:type "hidden" :name "from" :value (str from)}]
-           [:input {:type "hidden" :name "to" :value (str to)}]
-           [:p.quick "Quick dates: "
-            (for [[label f t] (quick-ranges)]
-              [:a {:href (href f t)} label])]
-           [:div.row
-            [:label "Time "
-             [:select {:name "time"}
-              (for [[v l] [["any" "Any time"] ["daytime" "Daytime"] ["evening" "Evening (5pm+)"]]]
-                [:option {:value v :selected (= v time-of-day)} l])]]]
-           [:fieldset [:legend "Kinds (none ticked = all)"]
-            (for [[k label] rank/kind-labels]
-              [:label.check [:input {:type "checkbox" :name "kind" :value (name k) :checked (checked? k)}] label])]
-           [:div.row
-            [:label "Max price £" [:input {:type "number" :name "max_price" :min 0 :step 1 :value (p "max_price") :size 4}]]
-            [:label "Venue contains " [:input {:type "text" :name "venue" :value (p "venue")}]]
-            [:label.check [:input {:type "checkbox" :name "sold_out" :checked include-sold-out?}] "Include sold out"]]
-           [:div.row
-            [:label.grow "Looking for "
-             [:input {:type "text" :name "q" :value q :placeholder "e.g. folk music, something about history, silly fun"}]]
-            [:button {:type "submit"} "Find"]]]]
-          (no-taste-note examples)
-          [:p.count (str (count candidates) " events match "
-                         (if (= from to) (fmt from "EEE d MMM") (str (fmt from "d MMM") "–" (fmt to "d MMM")))
-                         ", best matches first.")]
-          (when (seq rows)
-            [:table.results
-             [:thead [:tr [:th "When"] [:th "Event"] [:th "Venue"] [:th "Type"] [:th "Price"] [:th {:colspan 7} [:span.sr "Actions"]]]]
-             rows])
-          [:script (h/raw details-script)])))
+           ;; re-queries itself 400ms after the last change, swapping in just
+           ;; the results and the calendar (whose counts and links follow the
+           ;; filters), so the field being typed in keeps focus
+           [:form.find {:method "get" :action "/find"
+                        :hx-get "/find" :hx-trigger "input delay:400ms, submit"
+                        :hx-select "#results" :hx-target "#results" :hx-swap "outerHTML"
+                        :hx-select-oob "#cals" :hx-push-url "true" :hx-sync "this:replace"}
+            (when like-key [:input {:type "hidden" :name "like" :value like-key}])
+            ;; dates are picked on the calendar; the form keeps them
+            [:input {:type "hidden" :name "from" :value (str from)}]
+            [:input {:type "hidden" :name "to" :value (str to)}]
+            [:fieldset [:legend "Time"]
+             (for [[v l] [["any" "Any time"] ["daytime" "Daytime"] ["evening" "Evening (5pm+)"]]]
+               [:label.check [:input {:type "radio" :name "time" :value v :checked (= v time-of-day)}] l])]
+            [:fieldset [:legend "Kinds (none ticked = all)"]
+             (for [[k label] rank/kind-labels]
+               [:label.check [:input {:type "checkbox" :name "kind" :value (name k) :checked (checked? k)}] label])]
+            [:div.row
+             (let [v (or (some-> (p "max_price") parse-double long (min price-slider-max)) price-slider-max)
+                   ;; the label follows the slider as it moves; the query waits for the debounce
+                   show "this.nextElementSibling.textContent = this.value >= this.max ? 'any' : '£' + this.value"]
+               [:label.price "Max price "
+                [:input {:type "range" :name "max_price" :min 0 :max price-slider-max :step 5 :value v :oninput show}]
+                [:output (if (>= v price-slider-max) "any" (str "£" v))]])
+             [:label "Venue contains " [:input {:type "text" :name "venue" :value (p "venue")}]]
+             [:label.check [:input {:type "checkbox" :name "sold_out" :checked include-sold-out?}] "Include sold out"]]
+            [:div.row
+             [:label.grow "Looking for "
+              [:input {:type "text" :name "q" :value q :placeholder "e.g. folk music, something about history, silly fun"}]]]]]
+          [:div#results
+           (no-taste-note examples)
+           [:p.count (str (count candidates) " events match "
+                          (if (= from to) (fmt from "EEE d MMM") (str (fmt from "d MMM") "–" (fmt to "d MMM")))
+                          ", best matches first.")]
+           (when (seq rows)
+             [:table.results
+              [:thead [:tr [:th "When"] [:th "Event"] [:th "Venue"] [:th "Type"] [:th "Price"] [:th {:colspan 7} [:span.sr "Actions"]]]]
+              rows])]
+          ;; outside the swapped parts, so each is registered once
+          [:script (h/raw details-script)]
+          [:script (h/raw range-script)])))
 
 ;;; --- Quick rate ---------------------------------------------------------------
 

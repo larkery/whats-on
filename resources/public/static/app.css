@@ -83,8 +83,9 @@ input, select, textarea { background: var(--bg); border: 1px solid var(--line); 
 textarea { width: 100%; }
 fieldset { border: 1px solid var(--line); border-radius: 0.4rem; margin: 0.35rem 0; padding: 0.2rem 0.6rem 0.35rem; }
 label.check { display: inline-flex; gap: 0.3rem; align-items: center; margin-right: 0.9rem; white-space: nowrap; }
-.quick { margin: 0.2rem 0; }
-.quick a { margin-right: 0.8rem; white-space: nowrap; }
+label.price { display: inline-flex; gap: 0.4rem; align-items: center; white-space: nowrap; }
+label.price input { width: 10rem; }
+label.price output { min-width: 2.5rem; font-variant-numeric: tabular-nums; }
 form.inline { display: inline; }
 form.inline button { font-size: 0.85rem; padding: 0 0.4rem; }
 ul.booked li { margin: 0.1rem 0; }
@@ -98,6 +99,10 @@ ul.booked li { margin: 0.1rem 0; }
 .cal { border-collapse: collapse; font-size: 0.85rem; }
 .cal caption { font-weight: 600; text-align: left; }
 .cal th { font-weight: normal; color: var(--muted); font-size: 0.75rem; width: 1.75rem; padding: 0; }
+/* week numbers: click to select the week */
+.cal td.wk a, .cal td.wk span { color: var(--muted); font-size: 0.75rem; border-right: 1px solid var(--line); }
+.cal td.wk a:hover { color: var(--fg); }
+.cal td.wk.sel a { color: var(--fg); font-weight: 700; }
 .cal td { padding: 0; text-align: center; }
 .cal td a, .cal td span { display: block; line-height: 1.45rem; text-decoration: none; color: var(--fg); border: 2px solid transparent; }
 .cal td a:hover { border-color: var(--accent); }

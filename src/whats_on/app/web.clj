@@ -5,8 +5,11 @@
             [hiccup2.core :as h]
             [whats-on.app.embed :as embed]
             [whats-on.app.rank :as rank]
-            [whats-on.app.store :as store])
-  (:import [java.time DayOfWeek LocalDate]
+            [whats-on.app.refresh :as refresh]
+            [whats-on.app.store :as store]
+            [whats-on.http :as http]
+            [whats-on.util :as u])
+  (:import [java.time DayOfWeek Instant LocalDate]
            [java.time.format DateTimeFormatter]
            [java.time.temporal IsoFields]))
 
@@ -31,12 +34,34 @@
     "daytime" (or (nil? start_time) (neg? (compare start_time "17:00")))
     true))
 
-(defn- price-str [{:keys [price_min price_max price_text]}]
-  (cond
-    (and price_min (zero? price_min) (or (nil? price_max) (zero? price_max))) "Free"
-    (and price_min price_max (not= price_min price_max)) (format "£%.0f–£%.0f" price_min price_max)
-    price_min (format "£%.2f" price_min)
-    :else price_text))
+(defn- price-amount
+  "Just the money: the scraped prices, else any £ amounts (or 'free') in the
+  site's own wording. Nil if there's none."
+  [{:keys [price_min price_max price_text]}]
+  (let [{:keys [price-min price-max]} (when-not price_min (u/parse-prices price_text))
+        lo (or price_min price-min)
+        hi (if price_min price_max price-max)]
+    (cond
+      (nil? lo) nil
+      (and (zero? lo) (or (nil? hi) (zero? hi))) "Free"
+      (and hi (not= lo hi)) (format "£%.0f–£%.0f" lo hi)
+      :else (format "£%.2f" lo))))
+
+(defn- price-str [item] (or (price-amount item) (:price_text item)))
+
+(defn- price-cell
+  "The Find table's price: the amount only, with the site's wording (often a
+  sentence) as a tooltip on it, or on a ? when there's no amount."
+  [{:keys [price_text] :as item}]
+  (let [amount (price-amount item)
+        ;; wording that is only an amount adds nothing
+        note (when-not (re-matches #"(?i)\s*(free|£\s?[\d.]+(\s*[-–]\s*£?\s?[\d.]+)?)\s*" (str price_text))
+               (u/clean price_text))]
+    [:td.price
+     (cond
+       (and amount note) [:span.tip {:title note} amount]
+       amount amount
+       note [:span.tip {:title note :aria-label note} "?"])]))
 
 (defn- date-str [{:keys [start_date start_time end_date]}]
   (let [d (->date start_date)]
@@ -69,7 +94,8 @@
      [:body
       [:header
        [:nav
-        (for [[href label] [["/plan" "Plan ahead"] ["/find" "Find something"] ["/rate" "Help me learn"] ["/taste" "My taste"]]]
+        (for [[href label] [["/plan" "Plan ahead"] ["/find" "Find something"] ["/rate" "Help me learn"] ["/taste" "My taste"]
+                            ["/refresh" "Refresh"]]]
           [:a {:href href :aria-current (when (= href active) "page")} label])]
        [:div#status {:hx-get "/status" :hx-trigger "load, every 5s" :hx-swap "innerHTML"}]]
       [:main [:h1 title] body]]])))
@@ -203,7 +229,7 @@
             [:button.toggle {:type "button" :aria-expanded "false"} "details"]]
            [:td venue]
            [:td (rank/kind-labels (rank/kind item))]
-           [:td.price (price-str item)]
+           (price-cell item)
            ;; one column per action, so the buttons line up down the table
            (for [[v label tip] rating-buttons] [:td.act (feedback-button "row" key v verdict label tip)])
            [:td.act (feedback-button "row" key "booked" verdict "✓" "Booked")]
@@ -620,7 +646,107 @@
                             :notes (not-empty notes)})))
 
 (defn status-fragment []
-  (let [{:keys [embedded total]} @status]
-    (if (and (pos? total) (< embedded total))
-      (str "Reading event descriptions: " embedded " / " total "…")
-      "")))
+  (let [{:keys [embedded total]} @status
+        {:keys [running? sources]} @refresh/state]
+    (str (h/html
+          (when running?
+            [:a {:href "/refresh"}
+             (str "Refreshing listings: " (count (filter (comp #{:done :failed} :status) (vals sources)))
+                  " / " (count sources) " sources… ")])
+          (when (and (pos? total) (< embedded total))
+            (str "Reading event descriptions: " embedded " / " total "…"))))))
+
+;;; --- Refresh -----------------------------------------------------------------
+
+(defn- clock [ms] (.format (.atZone (Instant/ofEpochMilli ms) u/london) (DateTimeFormatter/ofPattern "HH:mm")))
+
+(defn- duration [ms]
+  (let [s (quot ms 1000)]
+    (if (< s 60) (str s "s") (format "%dm %02ds" (quot s 60) (mod s 60)))))
+
+(def ^:private source-status
+  {:waiting "waiting" :fetching "fetching…" :saving "saving…" :done "✓"})
+
+(defn- live-sources [sources now]
+  [:table.results.runs
+   [:thead [:tr [:th "Source"] [:th "Status"] [:th "Events"] [:th "Time"]]]
+   [:tbody
+    (for [[k {:keys [status n error started-ms finished-ms]}] sources]
+      [:tr
+       [:td (name k)]
+       [:td (if (= :failed status) [:span.bad "failed: " error] (source-status status))]
+       [:td.n n]
+       [:td.n (when started-ms (duration (- (or finished-ms now) started-ms)))]])]])
+
+(defn- request-counts []
+  (when-let [stats (seq (sort @http/stats))]
+    [:table.results.runs
+     [:thead [:tr [:th "Site"] [:th "Network"] [:th "Cached"] [:th "Not modified"]]]
+     [:tbody (for [[host {:keys [requests cached not-modified]}] stats]
+               [:tr [:td host] [:td.n (or requests 0)] [:td.n (or cached 0)] [:td.n (or not-modified 0)]])]]))
+
+(defn- last-runs [ds]
+  (let [runs (store/last-runs ds)]
+    [:section
+     [:h2 "Each source's last fetch"]
+     (if (empty? runs)
+       [:p "Never fetched."]
+       [:table.results.runs
+        [:thead [:tr [:th "Source"] [:th "When"] [:th "Events"] [:th "Result"]]]
+        [:tbody
+         (for [{:keys [source started_at ok n_events error]} runs
+               :let [t (.atZone (Instant/parse started_at) u/london)]]
+           [:tr
+            [:td source]
+            [:td (.format t (DateTimeFormatter/ofPattern "EEE d MMM HH:mm"))]
+            [:td.n n_events]
+            [:td (if (= 1 ok) "✓" [:span.bad "failed: " error])]])]])]))
+
+(defn refresh-panel
+  "The whole Refresh page body. While a refresh runs it re-fetches itself every
+  2s; the copy sent once it's finished doesn't, which stops the polling."
+  [ds cfg]
+  (let [{:keys [running? started-ms finished-ms phase sources dupes log]} @refresh/state
+        now (System/currentTimeMillis)
+        finished (filter (comp #{:done :failed} :status) (vals sources))
+        failed (filter (comp #{:failed} :status) (vals sources))]
+    (str
+     (h/html
+      (if running?
+        [:div#refresh {:hx-get "/refresh/progress" :hx-trigger "every 2s" :hx-swap "outerHTML"}
+         [:p [:strong phase] " · started " (clock started-ms) ", " (duration (- now started-ms)) " ago"]
+         [:p [:progress {:value (count finished) :max (count sources)}] [:br]
+          (count finished) " of " (count sources) " sources done"
+          (when (seq failed) [:span.bad " (" (count failed) " failed)"])]
+         (live-sources sources now)
+         ;; plain, not folded: a re-fetched <details> would keep closing
+         [:h2 "Log"]
+         [:pre.log (str/join "\n" (take-last 25 log))]
+         [:h2 "Requests per site"]
+         (request-counts)]
+        [:div#refresh
+         [:p.intro "Fetches every venue's listings into the database, one request at a time per site: "
+          "about 10–15 minutes. New events are read for suggestions as soon as it's done."]
+         (when finished-ms
+           [:p.note
+            "The last refresh " (if (= "Failed" phase) [:span.bad "stopped with an error"] "finished")
+            " at " (clock finished-ms) " after " (duration (- finished-ms started-ms)) ": "
+            (reduce + (keep :n (vals sources))) " events from " (- (count sources) (count failed)) " sources"
+            (when (seq failed)
+              [:span.bad "; " (str/join ", " (keep (fn [[k v]] (when (= :failed (:status v)) (name k))) sources))
+               " failed"])
+            (when dupes (str ". " dupes " listings matched as duplicates"))
+            "."])
+         [:form {:method "post" :action "/refresh"}
+          [:p [:button {:type "submit"} "Refresh now"]]
+          [:details [:summary "Only some sources"]
+           [:p (for [k (refresh/source-names cfg)]
+                 [:label.chip [:input {:type "checkbox" :name "only" :value (name k)}] (name k)])]
+           [:p.hint "None ticked means all of them."]]]
+         (when finished-ms
+           (list [:details [:summary "Requests per site"] (request-counts)]
+                 [:details [:summary "Log"] [:pre.log (str/join "\n" log)]]))
+         (last-runs ds)])))))
+
+(defn refresh-page [ds cfg]
+  (page "Refresh listings" "/refresh" (h/raw (refresh-panel ds cfg))))

@@ -1,6 +1,7 @@
 (ns whats-on.app.store
-  "Database access for the app. Reads events written by the bb scrapers, and
-  owns the taste tables: feedback, statements, history, plus cached embeddings."
+  "Database access for the app: the events tables (written by
+  whats-on.app.refresh), and the taste tables: feedback, statements, history,
+  plus cached embeddings."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [next.jdbc :as jdbc]
@@ -11,6 +12,58 @@
 
 (def schema
   ["pragma journal_mode = wal"
+   "create table if not exists events (
+      id           text primary key,  -- '<source>:<source_id>'
+      source       text not null,
+      source_id    text not null,
+      venue        text,
+      title        text not null,
+      subtitle     text,
+      description  text,
+      start_date   text not null,     -- yyyy-mm-dd, UK local
+      start_time   text,              -- HH:MM, null if unknown
+      end_date     text,              -- set for runs (a show on over several days)
+      end_time     text,
+      date_text    text,              -- the site's own wording, e.g. 'Weds 17th & Thu 18th Feb'
+      price_min    real,              -- GBP
+      price_max    real,
+      price_text   text,
+      url          text,
+      booking_url  text,
+      category     text,
+      tags         text,              -- JSON array
+      image        text,
+      sold_out     integer not null default 0,
+      first_seen   text not null,
+      last_seen    text not null,
+      canonical_id text               -- id of the preferred listing when duplicated across sources
+    )"
+   "create index if not exists events_start on events(start_date)"
+   "create index if not exists events_canonical on events(canonical_id)"
+   "create table if not exists runs (
+      source      text not null,
+      started_at  text not null,
+      finished_at text,
+      ok          integer,
+      n_events    integer,
+      error       text
+    )"
+   ;; One row per real-world event, preferring venue listings over aggregators,
+   ;; filling price/description gaps from duplicates, and listing other sources.
+   "drop view if exists upcoming"
+   "create view upcoming as
+    select e.id, e.source, e.venue, e.title, e.subtitle,
+           coalesce(e.description, (select d.description from events d
+                                    where d.canonical_id = e.id and d.description is not null limit 1)) as description,
+           e.start_date, e.start_time, e.end_date, e.end_time, e.date_text,
+           coalesce(e.price_min, (select min(d.price_min) from events d where d.canonical_id = e.id)) as price_min,
+           coalesce(e.price_max, (select max(d.price_max) from events d where d.canonical_id = e.id)) as price_max,
+           e.price_text, e.url, e.booking_url, e.category, e.tags, e.image, e.sold_out,
+           (select group_concat(d.source || ' ' || coalesce(d.booking_url, d.url), char(10))
+              from events d where d.canonical_id = e.id and d.id <> e.id) as also_listed
+      from events e
+     where e.canonical_id = e.id
+       and coalesce(e.end_date, e.start_date) >= date('now', 'localtime')"
    "create table if not exists embeddings (
       hash text primary key,       -- sha1 of the embedded text
       model text not null,
@@ -53,9 +106,9 @@
 (defn now [] (str (Instant/now)))
 
 (defn datasource [db-path]
-  (let [ds (jdbc/get-datasource {:dbtype "sqlite" :dbname db-path})]
-    ;; wait rather than fail if the scraper is mid-write
-    (jdbc/execute! ds ["pragma busy_timeout = 10000"])
+  ;; every connection waits rather than fails while a refresh is mid-write
+  ;; (a pragma would only apply to the one connection that ran it)
+  (let [ds (jdbc/get-datasource {:dbtype "sqlite" :dbname db-path :busy_timeout 10000})]
     (doseq [s schema] (jdbc/execute! ds [s]))
     ds))
 
@@ -204,3 +257,13 @@
                                          on conflict(key) do nothing"
                                         k "booked" (:title b) (:venue b) (:event_date b) (:url b)
                                         text (sha1 text) (now)]))))))
+
+;;; --- refreshes --------------------------------------------------------------
+
+(defn last-runs
+  "Each source's most recent fetch, from the runs table."
+  [ds]
+  (q ds ["select r.* from runs r
+            join (select source, max(started_at) as s from runs group by source) m
+              on m.source = r.source and m.s = r.started_at
+           order by r.source"]))

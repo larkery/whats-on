@@ -10,7 +10,8 @@
             [cheshire.core :as json]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [whats-on.robots :as robots])
+            [whats-on.robots :as robots]
+            [whats-on.util :as u])
   (:import [java.net URI URLEncoder]
            [java.security MessageDigest]))
 
@@ -24,12 +25,11 @@
 (def stats (atom {}))
 
 (defn- user-agent []
-  (str "whats-on/0.1 (personal events reader; babashka"
+  (str "whats-on/0.1 (personal events reader"
        (when-let [c (:contact @config)] (str "; " c))
        ")"))
 
-(defn- log [& xs]
-  (binding [*out* *err*] (apply println xs)))
+(def ^:private log u/log)
 
 ;;; --- cache --------------------------------------------------------------
 
@@ -109,6 +109,13 @@
 ;;; --- robots.txt ---------------------------------------------------------
 
 (defonce ^:private robots-cache (atom {}))
+
+(defn reset-run!
+  "Start a run: zero the request counts, and re-read robots.txt (from the disk
+  cache if under a day old) rather than keeping it for as long as the app runs."
+  []
+  (reset! stats {})
+  (reset! robots-cache {}))
 
 (defn- fetch-robots [host]
   (let [url (str "https://" host "/robots.txt")

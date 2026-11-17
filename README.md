@@ -6,7 +6,8 @@ wade through the websites themselves.
 
 ## Use
 
-    bb scrape                 # fetch ~6 months ahead into whats-on.db (10-15 minutes)
+    bb scrape                 # fetch ~6 months ahead into whats-on.db (10-15 minutes);
+                              # same as `clojure -M:scrape`, or Refresh in the app
     bb scrape --only beacon,cube
     bb upcoming               # plain-text list of the next 7 days
     bb upcoming --days 30 --q jazz
@@ -14,7 +15,9 @@ wade through the websites themselves.
     bb html --days 30         # writes whats-on.html: plain, large text, no images
     bb sources
 
-Meant to run about once a week (cron / systemd timer).
+Meant to run about once a week (cron / systemd timer, or the app's Refresh
+page). Fetching runs on the JVM (`whats-on.app.refresh`); the other bb tasks
+only read the database the app creates.
 
 ## Sources
 
@@ -42,13 +45,14 @@ Meant to run about once a week (cron / systemd timer).
 | storysmith        | WooCommerce category page + Store API for descriptions    |
 | lost-in-the-reads | TicketTailor                                               |
 | megascreen        | Bristol Aquarium "now showing" page                       |
+| plough            | Squarespace events page (everything on one page)          |
 
 Shared parsers: `tribe.clj` (The Events Calendar, a common WordPress plugin),
 `tickettailor.clj`, `eventbrite.clj`. Any other venue on one of those
 platforms is a few lines (see `alma.clj` or `bristol_cathedral.clj`).
 
 Each source lives in `src/whats_on/sources/<name>.clj`, returns plain maps, and is
-registered in `whats-on.main/registry`. To add a venue, copy the closest one.
+registered in `whats-on.sources/registry`. To add a venue, copy the closest one.
 Anything spanning more than 180 days (permanent displays, all-year tours) is
 dropped.
 
@@ -89,6 +93,10 @@ database. It only listens on 127.0.0.1.
 - **Quick rate**: a random spread of upcoming events to 👍/👎, to get started.
 - **My taste**: sentences about what you like or don't, past events you've
   been to (paste `Title | Venue | Date | notes` lines), and all your ratings.
+- **Refresh**: fetch every source (or some) in the background, with each
+  source's progress, the log and request counts while it runs, and each
+  source's last fetch from the `runs` table. The status line in the header
+  shows a running refresh on every page.
 
 Every card has 👍 Interested · 👎 Not for me · ✓ Booked · Hide · More like this.
 A rating applies to every date of that event (e.g. all screenings of a film).
@@ -99,7 +107,8 @@ Each event's title, tags, venue and description are embedded on-device with
 [bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) through
 ONNX Runtime (no Python, no network after the first ~130MB model download into
 `~/.cache/whats-on/models`). Embeddings are cached in the `embeddings` table,
-and new events are picked up every 10 minutes while the app runs.
+and new events are read as soon as a refresh finishes (or within 10 minutes
+of a `clojure -M:scrape` run).
 
 Your taste is a set of examples: liked (+1), booked (+1.5), past events
 (+1.5), "I like…" sentences (+1), disliked and "not for me" (−1). An event
@@ -125,7 +134,7 @@ Not done yet: non-semantic scoring (price, day of week, venue habits).
   and it's what their own page loads in your browser. This tool reads it on
   your behalf at roughly the volume of one person browsing the site (about 20
   requests a week). See the note in `sources/headfirst.clj`.
-- An honest User-Agent: `whats-on/0.1 (personal events reader; babashka)`. Set
+- An honest User-Agent: `whats-on/0.1 (personal events reader)`. Set
   `:contact` in `config.edn` to add a way for site owners to reach you.
 - 429 / 5xx responses back off (respecting `Retry-After`) and retry at most twice.
 

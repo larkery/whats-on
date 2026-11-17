@@ -6,6 +6,7 @@
   --line: #ccc;
   --accent: #0b4fa8;
   --soft: #f3f3f3;
+  --bad: #b00020;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -15,6 +16,7 @@
     --line: #444;
     --accent: #8cb8ff;
     --soft: #1e1e1e;
+    --bad: #ff8a80;
   }
 }
 
@@ -147,6 +149,7 @@ table.results { width: 100%; border-collapse: collapse; font-size: 0.9rem; line-
 .results .badge { font-size: 0.75rem; }
 .results td:nth-child(3) { white-space: nowrap; max-width: 16rem; overflow: hidden; text-overflow: ellipsis; }
 .results td:nth-child(4), .results td.price { white-space: nowrap; }
+.results .tip { text-decoration: underline dotted; text-underline-offset: 0.2em; cursor: help; }
 .results td.act { padding: 0.05rem 0.1rem; width: 1px; }
 .results td.act button, .results td.act .button { display: block; width: 1.9rem; padding: 0; text-align: center; font-size: 0.85rem; line-height: 1.35rem; }
 /* "details" sits on the title's line and opens a full-width line underneath */
@@ -158,3 +161,12 @@ table.results { width: 100%; border-collapse: collapse; font-size: 0.9rem; line-
 .results tr.detail p { margin: 0.2rem 0; max-width: 70rem; }
 .results tbody.dismissed td { color: var(--muted); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* Refresh */
+.bad { color: var(--bad); }
+progress { width: 100%; max-width: 30rem; height: 0.9rem; accent-color: var(--accent); }
+table.runs { width: auto; min-width: min(40rem, 100%); }
+.runs td.n { text-align: right; }
+.runs td:nth-child(3) { max-width: none; }
+pre.log { max-width: 60rem; font-size: 0.8rem; line-height: 1.35; background: var(--soft); padding: 0.4rem 0.6rem;
+          border-radius: 0.35rem; white-space: pre-wrap; overflow-wrap: anywhere; }

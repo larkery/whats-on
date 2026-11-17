@@ -1,5 +1,7 @@
-;; JVM side: the local web app (suggestions, search, feedback, embeddings).
-;; The scrapers run under babashka (bb.edn); both share whats-on.db.
+;; JVM side: the local web app (suggestions, search, feedback, embeddings) and
+;; the refresh that fetches every source into whats-on.db. The scrapers'
+;; babashka libraries are plain Clojure libraries here. bb.edn has the small
+;; read-only tasks.
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure                    {:mvn/version "1.12.0"}
         http-kit/http-kit                      {:mvn/version "2.8.0"}
@@ -8,7 +10,13 @@
         com.github.seancorfield/next.jdbc      {:mvn/version "1.3.939"}
         org.xerial/sqlite-jdbc                 {:mvn/version "3.46.1.0"}
         com.microsoft.onnxruntime/onnxruntime  {:mvn/version "1.20.0"}
-        cheshire/cheshire                      {:mvn/version "5.13.0"}}
+        cheshire/cheshire                      {:mvn/version "5.13.0"}
+        org.babashka/http-client               {:mvn/version "0.4.23"}
+        org.babashka/cli                       {:mvn/version "0.8.67"}
+        babashka/fs                            {:mvn/version "0.5.33"}
+        org.jsoup/jsoup                        {:mvn/version "1.22.2"}}
  :aliases {:app {:main-opts ["-m" "whats-on.app.main"]}
+           ;; fetch every source without the app: `clojure -M:scrape [--only a,b] [--days N]`
+           :scrape {:main-opts ["-m" "whats-on.app.refresh"]}
            ;; recommender testbench: `clojure -M:bench snapshot`, then `clojure -M:bench run`
            :bench {:main-opts ["-m" "whats-on.app.bench"]}}}

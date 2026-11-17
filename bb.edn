@@ -2,8 +2,8 @@
  :pods {org.babashka/go-sqlite3 {:version "0.3.9"}}
  :tasks
  {:requires ([whats-on.main :as m])
-  scrape   {:doc  "Fetch events from all sources into the db. Options: --only a,b  --days N"
-            :task (apply m/scrape *command-line-args*)}
+  scrape   {:doc  "Fetch events from all sources into the db (JVM; also the app's Refresh page). Options: --only a,b  --days N"
+            :task (apply shell "clojure -M:scrape" *command-line-args*)}
   upcoming {:doc  "Print a plain list of upcoming events. Options: --days N  --q text  --category text"
             :task (apply m/upcoming *command-line-args*)}
   html     {:doc  "Write a plain HTML list of upcoming events. Options: --days N  --out file"

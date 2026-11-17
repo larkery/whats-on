@@ -10,8 +10,13 @@
 
 (defn today [] (LocalDate/now london))
 
+(def ^:dynamic *sink*
+  "If bound, a fn also given each logged line (the app's Refresh page shows them)."
+  nil)
+
 (defn log [& xs]
-  (binding [*out* *err*] (apply println xs)))
+  (binding [*out* *err*] (apply println xs))
+  (when *sink* (*sink* (str/join " " xs))))
 
 ;;; --- HTML ---------------------------------------------------------------
 
@@ -149,10 +154,12 @@
     (LocalDate/of (parse-long y) (parse-long m) (parse-long d))))
 
 (defn parse-time
-  "'7.30pm', '19:00', '3:00 PM', '8pm', '12:00 PM' -> \"HH:MM\""
+  "'7.30pm', '19:00', '3:00 PM', '8pm', '12:00 PM' -> \"HH:MM\"
+  The space before am/pm may be a (narrow) no-break space, as Java and ICU
+  date formatting now write it."
   [s]
   (when s
-    (if-let [[_ h m ap] (re-find #"(?i)\b(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)\b" s)]
+    (if-let [[_ h m ap] (re-find #"(?i)\b(\d{1,2})(?:[:.](\d{2}))?[\s  ]*(am|pm)\b" s)]
       (let [h (mod (parse-long h) 12)
             h (if (= "pm" (str/lower-case ap)) (+ h 12) h)]
         (format "%02d:%s" h (or m "00")))

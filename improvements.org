@@ -148,6 +148,16 @@
    centering. Two catches. (a) Top-3% hits for likes fall 25% → 16% (8 → 5
    of 32, so noisy). (b) Dislikes then play no part in the score, which
    is what 5. should fix.
+
+   Venue (bench 2026-11-17, snapshot 2026-11-16). Venue-held-out LOO
+   mode: pool-mean centring keeps likes' mean pct (82.6) but only 3% reach
+   the top 3% (vs 16% grouped). 54% of top suggestions cite a same-venue
+   "because" (14% base). Fix: centre each event on its venue's mean shrunk
+   toward the global one, α = n/(n+k). k=50 is in the app: top-3% with
+   venue held out 3% → 12.5% (bookings 3% → 24%), same-venue "because"
+   54% → 30%, AUC 85.0 → 82.8 (dislikes +2.4). k=20 is stronger (23%,
+   AUC 79). Full per-venue centring breaks small venues (skew 11.5).
+   Venue is real signal for dislikes: give it an explicit term in 5.
 4. compute z-scores for examples - ? hubness correction (e.g.
     CSLS, from cross-lingual word embeddings).
 5. Weigh likes against dislikes directly. Replace "positives minus a

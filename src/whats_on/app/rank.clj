@@ -102,34 +102,63 @@
 (defn matched-sim
   "The similarity in centred space that's as selective as `raw-sim` is in raw
   space: the same quantile of example–event similarity."
-  [raw-examples centred-examples raw-vecs center raw-sim]
-  (let [raw (sims-sample raw-examples raw-vecs)]
+  [raw-examples centred-examples events center raw-sim]
+  (let [raw (sims-sample raw-examples (map :vec events))]
     (if (empty? raw)
       raw-sim
-      (quantile (sims-sample centred-examples (map center raw-vecs))
+      (quantile (sims-sample centred-examples (map center events))
                 (/ (count (filter #(< % raw-sim) raw)) (count raw))))))
 
+(defn venue-key [venue] (str/trim (str/replace (str/lower-case (str venue)) #"[^a-z0-9]+" " ")))
+
+;; how far toward its venue's own mean an event is centred: α = n/(n+k) for a
+;; venue with n upcoming events (bench, 2026-11-17)
+(def venue-k 50)
+
+(defn centerer
+  "→ (fn [{:keys [vec venue]}] centred vec), for `events` [{:vec :venue}].
+  With k nil, centre on the events' mean. With a number k, centre each one on
+  its venue's mean shrunk toward the overall mean: μ + α(μ_venue − μ),
+  α = n/(n+k), n = the venue's events. A big venue loses most of its house
+  style (boilerplate, the way its listings are written), so a liked event's
+  neighbours are like it in kind, not just in where they are; a venue with a
+  handful of events barely moves. Statements, and examples at venues with no
+  upcoming events, are centred on the overall mean."
+  [events k]
+  (let [mu (embed/mean-vec (map :vec events))
+        shifts (when k
+                 (into {} (for [[vk evs] (group-by (comp venue-key :venue) events)
+                                :let [n (count evs)
+                                      a (/ n (+ n k))
+                                      mu-v (embed/mean-vec (map :vec evs))]]
+                            [vk (float-array (map #(+ %1 (* a (- %2 %1))) mu mu-v))])))]
+    (fn [{:keys [vec venue]}]
+      (embed/center (or (and venue (get shifts (venue-key venue))) mu) vec))))
+
 (defn taste-model
-  "Taste examples centred on the mean of `vecs` (the upcoming events)."
-  [examples vecs]
-  (let [mu (embed/mean-vec vecs)
-        center (partial embed/center mu)
-        centred (mapv #(update % :vec center) examples)]
-    {:center center
-     :examples centred
-     :because-sim (matched-sim examples centred vecs center strong-sim)}))
+  "Taste examples centred by (centerer events k); `events` are the upcoming
+  events as [{:vec :venue}]."
+  ([examples events] (taste-model examples events venue-k))
+  ([examples events k]
+   (let [center (centerer events k)
+         centred (mapv #(assoc % :vec (center %)) examples)]
+     {:center center
+      :examples centred
+      :because-sim (matched-sim examples centred events center strong-sim)})))
 
 (defn model-score
-  "taste-score for raw vector `v` under a taste-model. No dislike penalty: after
-  centring it hurt (bench, 2026-11-16)."
-  [{:keys [center examples because-sim]} v]
-  (when v
-    (taste-score examples (center v) {:penalty-sim ##Inf :because-sim because-sim})))
+  "taste-score for `event` ({:vec raw-vec :venue}) under a taste-model. No
+  dislike penalty: after centring it hurt (bench, 2026-11-16)."
+  [{:keys [center examples because-sim]} event]
+  (when (:vec event)
+    (taste-score examples (center event) {:penalty-sim ##Inf :because-sim because-sim})))
 
 (defn model
   "taste-model for the app: all taste examples, centred on the upcoming events."
   [ds examples]
-  (taste-model examples (keep #(@store/vectors (:hash %)) (store/items ds))))
+  (taste-model examples (keep (fn [{:keys [hash venue]}]
+                                (when-let [v (@store/vectors hash)] {:vec v :venue venue}))
+                              (store/items ds))))
 
 ;;; --- what to ask about next ---------------------------------------------------
 
@@ -172,9 +201,10 @@
   (let [cands (vec (for [it items
                          :let [raw (@store/vectors (:hash it))]
                          :when raw]
-                     (let [v (center raw)]
+                     (let [event {:vec raw :venue (:venue it)}
+                           v (center event)]
                        {:item it :v v
-                        :score (:score (model-score model raw))
+                        :score (:score (model-score model event))
                         :pos (nearest examples v #(pos? (:weight %)))
                         :neg (nearest examples v #(and (not (pos? (:weight %))) (or (:key %) (neg? (:weight %)))))})))
         cutoff (when (seq cands) (nth (sort (map :score cands)) (long (* 0.8 (count cands)))))
@@ -215,7 +245,7 @@
   [ds items {:keys [model query-vec q]}]
   (for [item items
         :let [v (@store/vectors (:hash item))
-              t (model-score model v)
+              t (model-score model {:vec v :venue (:venue item)})
               qsim (when (and query-vec v) (embed/cosine query-vec v))
               kw (when (and q (keyword-hit? q item)) 0.08)
               rank (cond

@@ -105,7 +105,7 @@
   {:name name
    :fit (fn [train pool] (let [f (fit train (mapv :vec pool))] (fn [x] (f (:vec x)))))})
 
-(defn venue-key [venue] (str/trim (str/replace (str/lower-case (str venue)) #"[^a-z0-9]+" " ")))
+(def venue-key rank/venue-key)
 
 (def baseline
   (on-vecs "baseline" (fn [train _pool] (fn [v] (:score (rank/taste-score train v))))))
@@ -128,7 +128,8 @@
              (let [c (partial embed/center (embed/mean-vec pool))
                    train' (mapv #(update % :vec c) train)
                    penalty-sim (if (= :matched threshold)
-                                 (rank/matched-sim train train' pool c rank/strong-sim)
+                                 (rank/matched-sim train train' (map #(hash-map :vec %) pool)
+                                                   (comp c :vec) rank/strong-sim)
                                  threshold)]
                (fn [v] (:score (rank/taste-score train' (c v) {:penalty-sim penalty-sim})))))))
 
@@ -136,43 +137,32 @@
   ;; a dislike never counts against an event
   ##Inf)
 
-(def app
-  ;; exactly what the app runs (rank/taste-model + rank/model-score)
-  (on-vecs "app" (fn [train pool]
-                   (let [m (rank/taste-model train pool)]
-                     (fn [v] (:score (rank/model-score m v)))))))
-
-(defn centerer
-  "→ (fn [{:keys [vec venue]}] centred vec). With k nil, centre on the pool's
-  mean, as the app does. With a number k, centre each event on its venue's mean
-  shrunk toward the pool's: μ + α(μ_venue − μ), α = n/(n+k), n = the venue's
-  pool events. A big venue loses most of its house style (boilerplate, the way
-  its listings are written); a venue with a handful of events barely moves.
-  k = 0 centres each venue fully. Examples at venues not in the pool, and
-  statements, are centred on the pool mean."
-  [pool k]
-  (let [mu (embed/mean-vec (map :vec pool))
-        shifts (when k
-                 (into {} (for [[vk evs] (group-by (comp venue-key :venue) pool)
-                                :let [n (count evs)
-                                      a (/ n (+ n k))
-                                      mu-v (embed/mean-vec (map :vec evs))]]
-                            [vk (float-array (map #(+ %1 (* a (- %2 %1))) mu mu-v))])))]
-    (fn [{:keys [vec venue]}]
-      (embed/center (or (and venue (get shifts (venue-key venue))) mu) vec))))
+(def centerer rank/centerer)
 
 (defn venue-centred
-  "app's model (no dislike penalty), but on centerer's venue-shrunk centring."
+  "The app's model (rank/taste-model + rank/model-score) with venue shrinkage
+  `k`: nil centres on the pool mean only; 0 centres each venue fully."
   [name k]
   {:name name
    :fit (fn [train pool]
-          (let [c (centerer pool k)
-                train' (mapv #(assoc % :vec (c %)) train)]
-            (fn [x] (:score (rank/taste-score train' (c x) {:penalty-sim no-penalty})))))})
+          (let [m (rank/taste-model train pool k)]
+            (fn [x] (:score (rank/model-score m x)))))})
+
+(def app
+  ;; exactly what the app runs
+  (venue-centred "app" rank/venue-k))
+
+(def pool-mean
+  ;; the app before venue shrinkage
+  (venue-centred "pool mean" nil))
 
 (def scorers
   [app
-   baseline
+   pool-mean
+   baseline])
+
+(def venue-ablations
+  [pool-mean
    (venue-centred "venue-shrunk k=20" 20)
    (venue-centred "venue-shrunk k=5" 5)
    (venue-centred "venue-centred fully" 0)])
@@ -182,7 +172,7 @@
    (on-vecs "baseline, no penalty"
             (fn [train _pool] (fn [v] (:score (rank/taste-score train v {:penalty-sim no-penalty})))))
    (centered "centered" :matched)
-   app])
+   pool-mean])
 
 (def booking-ablations
   [baseline
@@ -399,7 +389,7 @@
                         scorer (name mode) label (* 100 mean-delta)
                         (* 100 (first ci)) (* 100 (second ci)) wins losses n)))
      (println "\n'Because you liked…' at the same venue (top 3% of the pool vs all of it), and k-occurrence skew (k=10):")
-     (doseq [[label k] [["pool mean (app)" nil] ["venue-shrunk k=20" 20] ["venue-shrunk k=5" 5] ["venue-centred fully" 0]]
+     (doseq [[label k] [["pool mean (app)" nil] ["venue-shrunk k=20" 20] ["venue-shrunk k=50" 50] ["venue-shrunk k=100" 100]]
              :let [{:keys [top-same all-same top-sim examples]} (because-venue snap k)
                    c (centerer (:pool snap) k)]]
        (println (format "  %-20s same venue: top %4.0f%%, all %4.0f%% · mean sim %.2f · skew %.2f"

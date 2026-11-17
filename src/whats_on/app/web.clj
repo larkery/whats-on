@@ -392,7 +392,7 @@
      [:p.hint "Click a day to see it; shift-click another to see the range between. Darker days have more on."]
      [:script (h/raw range-script)]]))
 
-(def find-page-size 20)
+(def find-page-size 40)
 
 (declare find-page-html)
 

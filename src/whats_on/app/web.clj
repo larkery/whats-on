@@ -371,6 +371,10 @@
      [:p.hint "Click a day to see it; shift-click another to see the range between. Darker days have more on."]
      [:script (h/raw range-script)]]))
 
+(def find-page-size 20)
+
+(declare find-page-html)
+
 (defn find-page [ds params]
   (let [{:keys [items verdicts hidden examples model]} (ctx ds)
         p #(let [v (get params %)] (when-not (str/blank? v) (str/trim v)))
@@ -383,7 +387,7 @@
         max-price (some-> (p "max_price") parse-double)
         venue (some-> (p "venue") str/lower-case)
         q (p "q")
-        n (or (some-> (p "n") parse-long) 20)
+        offset (or (some-> (p "offset") parse-long) 0)
         include-sold-out? (= "on" (p "sold_out"))
         query-vec (cond
                     like-item (@store/vectors (:hash like-item))
@@ -402,22 +406,41 @@
                          filtered)
         results (->> (rank/score-items ds candidates {:model model :query-vec query-vec :q q})
                      (sort-by :rank >)
-                     (take n))
+                     (drop offset)
+                     (take find-page-size))
+        ;; infinite scroll: the last row fetches the next page when it comes into view
+        rows (concat (for [e results] (row e (verdicts (:key e)) (:shown e)))
+                     (when (< (+ offset find-page-size) (count candidates))
+                       [[:tr.more {:hx-get (str "/find?" (query-string (assoc params "offset" (+ offset find-page-size)
+                                                                              "fragment" "rows")))
+                                   :hx-trigger "revealed" :hx-swap "outerHTML"}
+                         [:td {:colspan 12} "Loading more…"]]]))
         checked? #(contains? kinds %)
         ;; the calendar keeps every other filter and only changes the dates
-        keep-params (dissoc params "from" "to")
+        keep-params (dissoc params "from" "to" "offset" "fragment")
         href (fn [f t] (str "/find?" (query-string (assoc keep-params "from" (str f) "to" (str t)))))]
+    (if (p "fragment")
+      (str (h/html rows))
+      (find-page-html {:like-item like-item :like-key like-key :from from :to to :time-of-day time-of-day
+                       :checked? checked? :href href :p p :include-sold-out? include-sold-out?
+                       :filtered filtered :examples examples :candidates candidates :rows rows}))))
+
+(defn- find-page-html
+  [{:keys [like-item like-key from to time-of-day checked? href p include-sold-out?
+           filtered examples candidates rows]}]
+  (let [q (p "q")]
     (page (if like-item (str "More like “" (:title like-item) "”") "Find something") "/find"
           [:div.find-top
            (calendar (cal-start from) from to (day-counts filtered time-of-day include-sold-out?) href)
           [:form.find {:method "get" :action "/find"}
            (when like-key [:input {:type "hidden" :name "like" :value like-key}])
+           ;; dates are picked on the calendar or the quick links; the form keeps them
+           [:input {:type "hidden" :name "from" :value (str from)}]
+           [:input {:type "hidden" :name "to" :value (str to)}]
            [:p.quick "Quick dates: "
             (for [[label f t] (quick-ranges)]
               [:a {:href (href f t)} label])]
            [:div.row
-            [:label "From " [:input {:type "date" :name "from" :value (str from)}]]
-            [:label "To " [:input {:type "date" :name "to" :value (str to)}]]
             [:label "Time "
              [:select {:name "time"}
               (for [[v l] [["any" "Any time"] ["daytime" "Daytime"] ["evening" "Evening (5pm+)"]]]
@@ -428,7 +451,6 @@
            [:div.row
             [:label "Max price £" [:input {:type "number" :name "max_price" :min 0 :step 1 :value (p "max_price") :size 4}]]
             [:label "Venue contains " [:input {:type "text" :name "venue" :value (p "venue")}]]
-            [:label "Show " [:input {:type "number" :name "n" :min 1 :max 200 :value n :size 3}]]
             [:label.check [:input {:type "checkbox" :name "sold_out" :checked include-sold-out?}] "Include sold out"]]
            [:div.row
             [:label.grow "Looking for "
@@ -437,11 +459,11 @@
           (no-taste-note examples)
           [:p.count (str (count candidates) " events match "
                          (if (= from to) (fmt from "EEE d MMM") (str (fmt from "d MMM") "–" (fmt to "d MMM")))
-                         "; showing the best " (count results) ".")]
-          (when (seq results)
+                         ", best matches first.")]
+          (when (seq rows)
             [:table.results
              [:thead [:tr [:th "When"] [:th "Event"] [:th "Venue"] [:th "Type"] [:th "Price"] [:th {:colspan 7} [:span.sr "Actions"]]]]
-             [:tbody (for [e results] (row e (verdicts (:key e)) (:shown e)))]]))))
+             [:tbody rows]]))))
 
 ;;; --- Quick rate ---------------------------------------------------------------
 

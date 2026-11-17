@@ -455,7 +455,9 @@
            ;; re-queries itself 400ms after the last change, swapping in just
            ;; the results and the calendar (whose counts and links follow the
            ;; filters), so the field being typed in keeps focus
-           [:form.find {:method "get" :action "/find"
+           ;; autocomplete off: a browser restoring old field values on Back
+           ;; would leave them out of step with the results
+           [:form.find {:method "get" :action "/find" :autocomplete "off"
                         :hx-get "/find" :hx-trigger "input delay:400ms, submit"
                         :hx-select "#results" :hx-target "#results" :hx-swap "outerHTML"
                         :hx-select-oob "#cals" :hx-push-url "true" :hx-sync "this:replace"}
@@ -463,24 +465,26 @@
             ;; dates are picked on the calendar; the form keeps them
             [:input {:type "hidden" :name "from" :value (str from)}]
             [:input {:type "hidden" :name "to" :value (str to)}]
-            [:fieldset [:legend "Time"]
-             (for [[v l] [["any" "Any time"] ["daytime" "Daytime"] ["evening" "Evening (5pm+)"]]]
-               [:label.check [:input {:type "radio" :name "time" :value v :checked (= v time-of-day)}] l])]
-            [:fieldset [:legend "Kinds (none ticked = all)"]
-             (for [[k label] rank/kind-labels]
-               [:label.check [:input {:type "checkbox" :name "kind" :value (name k) :checked (checked? k)}] label])]
             [:div.row
+             [:label.grow [:span.lbl "Looking for"]
+              [:input {:type "text" :name "q" :value q :placeholder "e.g. folk music, something about history, silly fun"}]]]
+            [:div.row
+             [:span.lbl "When"]
+             (for [[v l] [["any" "Any time"] ["daytime" "Daytime"] ["evening" "Evening"]]]
+               [:label.check [:input {:type "radio" :name "time" :value v :checked (= v time-of-day)}] l])
              (let [v (or (some-> (p "max_price") parse-double long (min price-slider-max)) price-slider-max)
                    ;; the label follows the slider as it moves; the query waits for the debounce
-                   show "this.nextElementSibling.textContent = this.value >= this.max ? 'any' : '£' + this.value"]
-               [:label.price "Max price "
+                   show "this.nextElementSibling.textContent = +this.value >= +this.max ? 'any' : '£' + this.value"]
+               [:label.price [:span.lbl "Max price"]
                 [:input {:type "range" :name "max_price" :min 0 :max price-slider-max :step 5 :value v :oninput show}]
-                [:output (if (>= v price-slider-max) "any" (str "£" v))]])
-             [:label "Venue contains " [:input {:type "text" :name "venue" :value (p "venue")}]]
-             [:label.check [:input {:type "checkbox" :name "sold_out" :checked include-sold-out?}] "Include sold out"]]
+                [:output (if (>= v price-slider-max) "any" (str "£" v))]])]
+            [:div.row.chips
+             [:span.lbl {:title "None ticked = all kinds"} "Kinds"]
+             (for [[k label] rank/kind-labels]
+               [:label.chip [:input {:type "checkbox" :name "kind" :value (name k) :checked (checked? k)}] label])]
             [:div.row
-             [:label.grow "Looking for "
-              [:input {:type "text" :name "q" :value q :placeholder "e.g. folk music, something about history, silly fun"}]]]]]
+             [:label [:span.lbl "Venue"] [:input {:type "text" :name "venue" :value (p "venue") :placeholder "name contains…"}]]
+             [:label.check [:input {:type "checkbox" :name "sold_out" :checked include-sold-out?}] "Include sold out"]]]]
           [:div#results
            (no-taste-note examples)
            [:p.count (str (count candidates) " events match "

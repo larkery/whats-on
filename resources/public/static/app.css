@@ -84,8 +84,25 @@ textarea { width: 100%; }
 fieldset { border: 1px solid var(--line); border-radius: 0.4rem; margin: 0.35rem 0; padding: 0.2rem 0.6rem 0.35rem; }
 label.check { display: inline-flex; gap: 0.3rem; align-items: center; margin-right: 0.9rem; white-space: nowrap; }
 label.price { display: inline-flex; gap: 0.4rem; align-items: center; white-space: nowrap; }
-label.price input { width: 10rem; }
+label.price input { width: 8rem; }
 label.price output { min-width: 2.5rem; font-variant-numeric: tabular-nums; }
+
+/* Find filters: compact, so the panel is about the calendar's height */
+form.find { font-size: 0.85rem; padding: 0.3rem 0.7rem; }
+form.find .row { gap: 0.25rem 0.7rem; margin: 0.3rem 0; }
+form.find label.check { margin-right: 0; gap: 0.2rem; }
+form.find label:not(.check):not(.chip) { display: inline-flex; gap: 0.4rem; align-items: center; }
+form.find input[type=text] { padding: 0.1rem 0.35rem; }
+form.find .lbl { color: var(--muted); font-size: 0.8rem; min-width: 4.3rem; }
+.chips { gap: 0.25rem; }
+.chips .lbl { margin-right: 0.45rem; }
+label.chip { display: inline-flex; padding: 0 0.45rem; border: 1px solid var(--line); border-radius: 1rem;
+             background: var(--bg); cursor: pointer; white-space: nowrap; line-height: 1.45; }
+label.chip:hover { border-color: var(--accent); }
+/* the checkbox stays focusable for the keyboard; the chip shows its state */
+label.chip input { position: absolute; opacity: 0; width: 0; height: 0; }
+label.chip:has(input:checked) { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+label.chip:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
 form.inline { display: inline; }
 form.inline button { font-size: 0.85rem; padding: 0 0.4rem; }
 ul.booked li { margin: 0.1rem 0; }
